@@ -41,20 +41,45 @@ The Enhanced Azure RAG System is a powerful, production-ready AI platform for en
 
 ## Architecture
 
-text
-                 User (Web/App)
-                      │
-           ┌──────────▼──────────┐
-           │      FastAPI        │
-           ├─────────┬───────────┤
-      Hybrid Retrieval   Analytics Mode
-  (OpenAI, FAISS, ST)        (Pandas)
-           │                  │
-Retriever → Re-Ranker Data Analyzer
-│
-│ Pattern De
-ection LLM/Structu
-text
+```
+             ┌───────────────────────────────────────┐
+             │         User (Web Interface)          │
+             └───────────────┬───────────────────────┘
+                             │  (HTTP Request)
+                             ▼
+                  ┌────────────────────┐
+                  │     FastAPI        │
+                  │      Backend       │
+                  └────────┬───────────┘
+                    ┌──────┴──────────────┐
+                    │                     │
+          ┌─────────▼────────┐   ┌────────▼─────────┐
+          │ Hybrid Retrieval │   │ Analytics Engine │
+          │  (RAG Pipeline)  │   │   (Pandas, etc.) │
+          └─────────┬────────┘   └────────┬─────────┘
+                    │                     │
+        ┌───────────▼─────────────┐   ┌───▼────────────┐
+        │   FAISS Vector Search   │   │  Data Analysis │
+        │ Sentence Transformers   │   │ Pattern Finding│ 
+        │ Azure OpenAI Embedding  │   └────────────────┘
+        └───────────┬─────────────┘
+                    ▼
+          ┌───────────────────────┐
+          │  Cross-Encoder Re-    │
+          │       Ranking         │
+          └──────────┬────────────┘
+                    ▼
+         ┌────────────────────────┐
+         │  Response Generation   │
+         │ (LLM or Data Summary)  │
+         └──────────┬─────────────┘
+                    ▼
+             ┌───────────────┐
+             │   User/API    │
+             │   Response    │
+             └───────────────┘
+
+```
 
 
 ## Setup & Installation
