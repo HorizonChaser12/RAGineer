@@ -1,0 +1,33 @@
+2025-07-21 20:47:08,906 - __main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:47:08,924 - __main__ - INFO - Starting Enhanced Azure RAG System API server...
+2025-07-21 20:47:16,739 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:47:16,874 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:47:37,013 - rag_system - INFO - Initializing RAG system with file: data/Defects.xlsx
+2025-07-21 20:47:37,013 - rag_system - INFO - Loading sentence transformer model: all-MiniLM-L6-v2
+2025-07-21 20:47:37,016 - sentence_transformers.SentenceTransformer - INFO - Use pytorch device_name: cpu
+2025-07-21 20:47:37,016 - sentence_transformers.SentenceTransformer - INFO - Load pretrained SentenceTransformer: all-MiniLM-L6-v2
+2025-07-21 20:47:37,350 - sentence_transformers.SentenceTransformer - WARNING - No sentence-transformers model found with name sentence-transformers/all-MiniLM-L6-v2. Creating a new one with mean pooling.
+2025-07-21 20:47:38,313 - rag_system - ERROR - Failed to load sentence transformer: There was a specific connection error when trying to load sentence-transformers/all-MiniLM-L6-v2:
+401 Client Error: Unauthorized for url: https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2/resolve/main/config.json (Request ID: Root=1-687e5a19-78730d2e4ce2478809eaecb4;1ee88432-33b2-4fee-844a-4d070f911487)
+
+Invalid credentials in Authorization header
+2025-07-21 20:47:38,313 - rag_system - INFO - Loading reranker model: cross-encoder/ms-marco-MiniLM-L-6-v2
+2025-07-21 20:47:38,573 - rag_system - ERROR - Failed to load reranker: There was a specific connection error when trying to load cross-encoder/ms-marco-MiniLM-L-6-v2:
+401 Client Error: Unauthorized for url: https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2/resolve/main/config.json (Request ID: Root=1-687e5a19-186675a326678641234464bf;c3ac0dad-96e5-4f58-827d-a7a7204d3583)
+
+Invalid credentials in Authorization header
+2025-07-21 20:47:38,573 - rag_system - INFO - Initializing Azure OpenAI models
+2025-07-21 20:47:38,590 - rag_system - ERROR - Fatal: Failed to initialize Azure OpenAI models: Missing credentials. Please pass one of `api_key`, `azure_ad_token`, `azure_ad_token_provider`, or the `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_AD_TOKEN` environment variables..
+2025-07-21 20:47:38,590 - rag_system - ERROR - Skipping data loading and index building due to model initialization failure.
+2025-07-21 20:47:38,590 - rag_system - ERROR - LLMChain could not be initialized because LLM is not available.
+2025-07-21 20:47:38,590 - rag_system - INFO - RAG system initialized successfully
+2025-07-21 20:48:20,171 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:20,208 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:29,931 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:29,973 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:39,290 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:39,337 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:48,608 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:48:48,638 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:49:05,187 - __mp_main__ - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.
+2025-07-21 20:49:05,223 - rag_system - WARNING - Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.

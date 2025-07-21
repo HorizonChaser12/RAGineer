@@ -56,67 +56,74 @@ Retriever → Re-Ranker Data Analyzer
 ection LLM/Structu
 text
 
+
 ## Setup & Installation
 
-### 1. Clone the Repository
+1. **Clone the Repository**
 
-git clone https://github.com/yourusername/azure-rag-enhanced.git
-cd azure-rag-enhance
+    ```
+    git clone https://github.com/yourusername/insightbridge.git
+    cd insightbridge
+    ```
 
-text
+2. **Install Dependencies**
 
-### 2. Install Dependencies
+    Ensure Python 3.8+ is installed.
 
-Ensure Python 3.8+ is available.
+    ```
+    pip install -r requirements.txt
+    ```
 
-pip install -r requirements.txt
+3. **Configure Environment**
 
-text
+    - Copy `.env.example` to `.env` and fill in your Azure OpenAI keys and endpoints.
+    - Place any data files for retrieval (e.g., Excel or CSV documents) in the designated path.
 
-### 3. Configure Environment
+4. **Start the Backend**
 
-- Copy `.env.example` to `.env` and fill in your Azure OpenAI keys and endpoints.
-- Place any source Excel files needed for retrieval queries in a valid path.
+    ```
+    uvicorn main:app --reload
+    ```
 
-### 4. Start the Backend
+5. **Launch the Frontend**
 
-uvicorn main:app --reload
-
-text
-
-### 5. Launch the Frontend
-
-Open `index.html` (in your web browser).
+    - Open `index.html` in your browser.
 
 ## Usage
 
-1. **Initialize the System:** Point to your data file via `/initialize`.
-2. **Query:** Use the web form to ask questions or use `/query` API.
-3. **Switch Modes:** Toggle between retrieval and analytical thinking as needed.
-4. **Monitor Status:** Check `/status` for system health and readiness.
+1. **System Initialization:**  
+   Load and configure your data source via `/initialize`.
+2. **Querying:**  
+   Ask questions via the web UI or the `/query` API.
+3. **Switch between Retrieval and Analytics:**  
+   Use analytical mode for direct data analysis.
+4. **Monitor System:**  
+   Check `/status` for health and readiness.
 
 ## API Endpoints
 
-| Endpoint              | Method | Description                                  |
-|-----------------------|--------|----------------------------------------------|
-| `/initialize`         | POST   | Load data, set configs, and start system     |
-| `/query`              | POST   | Ask a question and get a detailed answer     |
-| `/retrieve`           | POST   | Retrieve relevant documents only             |
-| `/rebuild-index`      | POST   | Rebuild search indices from current data     |
-| `/status`             | GET    | Get system's current status and availability |
-| `/health`             | GET    | Simple health check                          |
+| Endpoint           | Method | Description                                 |
+|--------------------|--------|---------------------------------------------|
+| `/initialize`      | POST   | Load data and set up system configuration   |
+| `/query`           | POST   | Ask a question, receive summarized answer   |
+| `/retrieve`        | POST   | Retrieve relevant documents only            |
+| `/rebuild-index`   | POST   | Rebuild search indices from current data    |
+| `/status`          | GET    | Get current system status                   |
+| `/health`          | GET    | Simple health check                         |
 
-**See `main.py` for payload examples.**
+> **See `main.py` for sample request payloads.**
 
 ## Configuration
 
-All sensitive keys and connection details are managed by environment variables:
+All keys and sensitive information are set in the `.env` file:
 
+``` 
 AZURE_OPENAI_API_KEY=your-azure-api-key
 AZURE_OPENAI_ENDPOINT=your-endpoint
 AZURE_OPENAI_API_VERSION=2023-03-15-preview
 AZURE_OPENAI_DEPLOYMENT=your-deployment
-text
+```
+
 
 ## Tech Stack
 

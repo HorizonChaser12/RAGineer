@@ -1,0 +1,1314 @@
+<!DOCTYPE html>
+
+
+
+
+
+
+
+<html lang="en">
+
+<head>
+
+ <meta charset="UTF-8">
+
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+ <title>Enhanced Azure RAG System</title>
+
+ <script src="https://cdn.tailwindcss.com"></script>
+
+ <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+
+ <style>
+
+ body {
+
+ font-family: 'Inter', sans-serif;
+
+ background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+
+ min-height: 100vh;
+
+ }
+
+ .glass-effect {
+
+ background: rgba(255, 255, 255, 0.95);
+
+ backdrop-filter: blur(10px);
+
+ border: 1px solid rgba(255, 255, 255, 0.2);
+
+ }
+
+ .loader {
+
+ border: 3px solid #f3f3f3;
+
+ border-top: 3px solid #3b82f6;
+
+ border-radius: 50%;
+
+ width: 24px;
+
+ height: 24px;
+
+ animation: spin 1s linear infinite;
+
+ }
+
+ @keyframes spin {
+
+ 0% { transform: rotate(0deg); }
+
+ 100% { transform: rotate(360deg); }
+
+ }
+
+ .method-badge {
+
+ font-size: 0.75rem;
+
+ padding: 0.25rem 0.5rem;
+
+ border-radius: 0.375rem;
+
+ font-weight: 500;
+
+ }
+
+ .azure-badge { background-color: #0078d4; color: white; }
+
+ .sentence-badge { background-color: #10b981; color: white; }
+
+ .rerank-badge { background-color: #f59e0b; color: white; }
+
+ .score-bar {
+
+ height: 4px;
+
+ border-radius: 2px;
+
+ transition: width 0.3s ease;
+
+ }
+
+ .collapsible-content {
+
+ max-height: 0;
+
+ overflow: hidden;
+
+ transition: max-height 0.3s ease;
+
+ }
+
+ .collapsible-content.expanded {
+
+ max-height: 1000px;
+
+ }
+
+ </style>
+
+</head>
+
+<body class="min-h-screen">
+
+ <div class="container mx-auto px-4 py-8 max-w-6xl">
+
+ <!-- Header -->
+
+ <div class="text-center mb-8">
+
+ <h1 class="text-4xl font-bold text-white mb-2">Enhanced Azure RAG System</h1>
+
+ <p class="text-blue-100">Advanced retrieval with multiple AI models and re-ranking</p>
+
+ </div>
+
+ <!-- System Status Card -->
+
+ <div class="glass-effect rounded-lg shadow-xl mb-6 p-6">
+
+ <div class="flex items-center justify-between mb-4">
+
+ <h2 class="text-xl font-semibold text-gray-800">System Status</h2>
+
+ <button id="refreshStatus" class="text-blue-600 hover:text-blue-800 font-medium">
+
+  <span id="refreshIcon">🔄</span> Refresh
+
+ </button>
+
+ </div>
+
+ <div id="systemStatus" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+
+ <!-- Status indicators will be populated here -->
+
+ </div>
+
+ </div>
+
+ <!-- Main Query Interface -->
+
+ <div class="glass-effect rounded-lg shadow-xl mb-6 p-6">
+
+ <div class="mb-6">
+
+ <label for="queryInput" class="block text-sm font-medium text-gray-700 mb-2">
+
+  Enter your query:
+
+ </label>
+
+ <textarea
+
+  id="queryInput"
+
+  rows="3"
+
+  class="w-full p-4 border border-gray-300 rounded-lg shadow-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500 resize-none"
+
+  placeholder="e.g., How to resolve authentication issues in the system?">
+
+ </textarea>
+
+ </div>
+
+ <!-- Query Controls -->
+
+ <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
+
+ <div>
+
+  <label class="block text-sm font-medium text-gray-700 mb-1">Results Count (k)</label>
+
+  <select id="kValue" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
+
+  <option value="3" selected>3 results</option>
+
+  <option value="5">5 results</option>
+
+  <option value="7">7 results</option>
+
+  <option value="10">10 results</option>
+
+  </select>
+
+ </div>
+
+ <div>
+
+  <label class="block text-sm font-medium text-gray-700 mb-1">Temperature</label>
+
+  <select id="temperature" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
+
+  <option value="0.3">0.3 (Focused)</option>
+
+  <option value="0.5">0.5 (Balanced)</option>
+
+  <option value="0.7" selected>0.7 (Creative)</option>
+
+  <option value="0.9">0.9 (Very Creative)</option>
+
+  </select>
+
+ </div>
+
+ <div>
+
+  <label class="block text-sm font-medium text-gray-700 mb-1">API Port</label>
+
+  <select id="apiPort" class="w-full p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
+
+  <option value="8000" selected>Port 8000</option>
+
+  <option value="8001">Port 8001</option>
+
+  </select>
+
+ </div>
+
+ </div>
+
+ <!-- Analytical Thinking Mode Toggle -->
+
+ <div class="bg-purple-50 border border-purple-200 rounded-lg p-4 mb-4">
+
+ <div class="flex items-center justify-between">
+
+  <div>
+
+  <h4 class="text-lg font-semibold text-purple-800 flex items-center">
+
+  <span class="mr-2">🧠</span> Analytical Thinking Mode
+
+  </h4>
+
+  <p class="text-sm text-purple-600 mt-1">
+
+  When enabled, bypasses document retrieval and uses direct data analysis with Pandas on the system's loaded data
+
+  </p>
+
+  </div>
+
+  <label class="relative inline-flex items-center cursor-pointer">
+
+  <input type="checkbox" id="analyticalMode" class="sr-only peer">
+
+  <div class="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-purple-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-purple-600"></div>
+
+  </label>
+
+ </div>
+
+ <div id="analyticalModeDetails" class="mt-3 text-sm text-purple-700" style="display: none;">
+
+  <div class="bg-purple-100 p-3 rounded-md">
+
+  <p class="flex items-center">
+
+  <span class="mr-2">ℹ️</span>
+
+  <strong>Note:</strong> This mode will analyze the same data that your system was initialized with.
+
+  No additional file configuration needed.
+
+  </p>
+
+  </div>
+
+ </div>
+
+ </div>
+
+ <!-- Action Buttons -->
+
+ <div class="flex flex-col sm:flex-row gap-3">
+
+ <button id="submitQuery" class="flex-1 bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700 text-white font-semibold py-3 px-6 rounded-lg shadow-lg transition duration-200 flex items-center justify-center">
+
+  <span id="queryLoader" class="loader mr-2" style="display: none;"></span>
+
+  <span id="queryText">Generate Response</span>
+
+ </button>
+
+ <button id="retrieveOnly" class="flex-1 bg-gradient-to-r from-green-600 to-teal-600 hover:from-green-700 hover:to-teal-700 text-white font-semibold py-3 px-6 rounded-lg shadow-lg transition duration-200">
+
+  Retrieve Documents Only
+
+ </button>
+
+ </div>
+
+ </div>
+
+ <!-- Quick Actions -->
+
+ <div class="glass-effect rounded-lg shadow-xl mb-6 p-4">
+
+ <h3 class="text-lg font-semibold text-gray-800 mb-3">Quick Actions</h3>
+
+ <div class="flex flex-wrap gap-2">
+
+ <button id="checkHealth" class="bg-blue-100 hover:bg-blue-200 text-blue-800 px-3 py-1 rounded-md text-sm font-medium transition">
+
+  Health Check
+
+ </button>
+
+ <button id="rebuildIndex" class="bg-yellow-100 hover:bg-yellow-200 text-yellow-800 px-3 py-1 rounded-md text-sm font-medium transition">
+
+  Rebuild Index
+
+ </button>
+
+ <button id="initializeSystem" class="bg-green-100 hover:bg-green-200 text-green-800 px-3 py-1 rounded-md text-sm font-medium transition">
+
+  Initialize System
+
+ </button>
+
+ <button id="clearLogs" class="bg-gray-100 hover:bg-gray-200 text-gray-800 px-3 py-1 rounded-md text-sm font-medium transition">
+
+  Clear Logs
+
+ </button>
+
+ </div>
+
+ </div>
+
+ <!-- Debug Console -->
+
+ <div class="glass-effect rounded-lg shadow-xl mb-6 p-4">
+
+ <div class="flex items-center justify-between mb-2">
+
+ <h3 class="text-lg font-semibold text-gray-800">Debug Console</h3>
+
+ <button id="toggleDebug" class="text-blue-600 hover:text-blue-800 text-sm font-medium">
+
+  Toggle
+
+ </button>
+
+ </div>
+
+ <div id="debugConsole" class="collapsible-content">
+
+ <div id="debugLogs" class="h-32 overflow-y-auto p-3 bg-gray-900 text-green-400 rounded-md font-mono text-sm">
+
+  System ready...
+
+ </div>
+
+ </div>
+
+ </div>
+
+ <!-- Results Area -->
+
+ <div id="resultsArea" class="space-y-6" style="display: none;">
+
+ <!-- AI Response -->
+
+ <div id="responseCard" class="glass-effect rounded-lg shadow-xl p-6">
+
+ <h2 class="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+
+  <span id="responseIcon" class="mr-2">🤖</span>
+
+  <span id="responseTitle">AI Response</span>
+
+ </h2>
+
+ <div id="response" class="prose max-w-none text-gray-700"></div>
+
+ </div>
+
+ <!-- Analytical Data Results -->
+
+ <div id="analyticalCard" class="glass-effect rounded-lg shadow-xl p-6" style="display: none;">
+
+ <h3 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+
+  <span class="mr-2">📊</span> Data Analysis Results
+
+ </h3>
+
+ <div id="analyticalResults"></div>
+
+ </div>
+
+ <!-- Pattern Analysis -->
+
+ <div id="patternCard" class="glass-effect rounded-lg shadow-xl p-6" style="display: none;">
+
+ <h3 class="text-xl font-semibold text-gray-800 mb-4 flex items-center">
+
+  <span class="mr-2">📊</span> Pattern Analysis
+
+ </h3>
+
+ <div id="patternAnalysis"></div>
+
+ </div>
+
+ <!-- Retrieved Documents -->
+
+ <div id="documentsCard" class="glass-effect rounded-lg shadow-xl p-6">
+
+ <div class="flex items-center justify-between mb-4">
+
+  <h3 class="text-xl font-semibold text-gray-800 flex items-center">
+
+  <span class="mr-2">📄</span> Retrieved Documents
+
+  <span id="docCount" class="ml-2 bg-blue-100 text-blue-800 px-2 py-1 rounded-full text-sm"></span>
+
+  </h3>
+
+  <button id="toggleDocs" class="text-blue-600 hover:text-blue-800 font-medium">
+
+  Show Details
+
+  </button>
+
+ </div>
+
+ <div id="retrievedDocs" class="space-y-4"></div>
+
+ </div>
+
+ </div>
+
+ <!-- Error Display -->
+
+ <div id="errorArea" class="glass-effect rounded-lg shadow-xl p-6 border-l-4 border-red-500 bg-red-50" style="display: none;">
+
+ <h3 class="text-lg font-semibold text-red-800 mb-2">Error</h3>
+
+ <p id="errorMessage" class="text-red-700"></p>
+
+ </div>
+
+ </div>
+
+ <script>
+
+ // DOM Elements
+
+ const queryInput = document.getElementById('queryInput');
+
+ const submitButton = document.getElementById('submitQuery');
+
+ const retrieveButton = document.getElementById('retrieveOnly');
+
+ const resultsArea = document.getElementById('resultsArea');
+
+ const responseDiv = document.getElementById('response');
+
+ const errorArea = document.getElementById('errorArea');
+
+ const errorMessage = document.getElementById('errorMessage');
+
+ const debugLogs = document.getElementById('debugLogs');
+
+ const systemStatus = document.getElementById('systemStatus');
+
+ const retrievedDocsDiv = document.getElementById('retrievedDocs');
+
+ const patternAnalysis = document.getElementById('patternAnalysis');
+
+ const patternCard = document.getElementById('patternCard');
+
+ const docCount = document.getElementById('docCount');
+
+ // State management
+
+ let currentData = null;
+
+ let docsExpanded = false;
+
+ let analyticalModeEnabled = false;
+
+ // Utility Functions
+
+ function log(message, type = 'info') {
+
+ const timestamp = new Date().toLocaleTimeString();
+
+ const logEntry = document.createElement('div');
+
+ const color = type === 'error' ? 'text-red-400' : type === 'success' ? 'text-green-400' : 'text-green-400';
+
+ logEntry.className = color;
+
+ logEntry.textContent = `[${timestamp}] ${message}`;
+
+ debugLogs.appendChild(logEntry);
+
+ debugLogs.scrollTop = debugLogs.scrollHeight;
+
+ }
+
+ function getApiUrl(endpoint = 'query') {
+
+ const port = document.getElementById('apiPort').value;
+
+ return `http://localhost:${port}/${endpoint}`;
+
+ }
+
+ function showError(message) {
+
+ errorMessage.textContent = message;
+
+ errorArea.style.display = 'block';
+
+ log(`Error: ${message}`, 'error');
+
+ }
+
+ function hideError() {
+
+ errorArea.style.display = 'none';
+
+ }
+
+ function showLoading(button) {
+
+ const loader = button.querySelector('.loader');
+
+ const text = button.querySelector('span:last-child');
+
+ if (loader) loader.style.display = 'inline-block';
+
+ if (text) text.textContent = 'Processing...';
+
+ button.disabled = true;
+
+ }
+
+ function hideLoading(button, originalText) {
+
+ const loader = button.querySelector('.loader');
+
+ const text = button.querySelector('span:last-child');
+
+ if (loader) loader.style.display = 'none';
+
+ if (text) text.textContent = originalText;
+
+ button.disabled = false;
+
+ }
+
+ // System Status Functions
+
+ async function updateSystemStatus() {
+
+ try {
+
+ const response = await fetch(getApiUrl('status'));
+
+ const data = await response.json();
+
+ systemStatus.innerHTML = '';
+
+ const statusItems = [
+
+  { label: 'System', value: data.initialized ? 'Ready' : 'Not Ready', success: data.initialized },
+
+  { label: 'Azure OpenAI', value: data.llm_ready ? 'Ready' : 'Not Ready', success: data.llm_ready },
+
+  { label: 'Embeddings', value: data.embedding_model_ready ? 'Ready' : 'Not Ready', success: data.embedding_model_ready },
+
+  { label: 'Documents', value: data.total_documents || 0, success: data.total_documents > 0 }
+
+ ];
+
+ statusItems.forEach(item => {
+
+  const statusDiv = document.createElement('div');
+
+  statusDiv.className = `p-3 rounded-lg ${item.success ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}`;
+
+  statusDiv.innerHTML = `
+
+  <div class="font-medium">${item.label}</div>
+
+  <div class="text-sm">${item.value}</div>
+
+  `;
+
+  systemStatus.appendChild(statusDiv);
+
+ });
+
+ log('System status updated successfully', 'success');
+
+ } catch (error) {
+
+ log(`Failed to get system status: ${error.message}`, 'error');
+
+ }
+
+ }
+
+ // Document Rendering Functions
+
+ function renderDocument(doc, index) {
+
+ const methodBadge = getMethodBadge(doc.retrieval_method);
+
+ const similarityScore = doc.similarity || 0;
+
+ const rerankScore = doc.rerank_score;
+
+ return `
+
+ <div class="border border-gray-200 rounded-lg p-4 bg-white shadow-sm">
+
+  <div class="flex items-center justify-between mb-3">
+
+  <div class="flex items-center space-x-2">
+
+  <span class="font-semibold text-gray-800">Document #${index + 1}</span>
+
+  <span class="text-sm text-gray-500">(ID: ${doc.id})</span>
+
+  ${methodBadge}
+
+  </div>
+
+  <div class="text-right text-sm">
+
+  <div>Similarity: ${(similarityScore * 100).toFixed(1)}%</div>
+
+  ${rerankScore ? `<div>Rerank: ${rerankScore.toFixed(3)}</div>` : ''}
+
+  </div>
+
+  </div>
+
+  <div class="mb-3">
+
+  <div class="score-bar bg-gray-200 rounded-full">
+
+  <div class="score-bar bg-blue-500 rounded-full" style="width: ${similarityScore * 100}%"></div>
+
+  </div>
+
+  </div>
+
+  <div class="space-y-2 text-sm">
+
+  ${Object.entries(doc.content || {}).map(([key, value]) =>
+
+  `<div><span class="font-medium text-gray-600">${formatKey(key)}:</span> <span class="text-gray-800">${formatValue(value)}</span></div>`
+
+  ).join('')}
+
+  </div>
+
+ </div>
+
+ `;
+
+ }
+
+ function getMethodBadge(method) {
+
+ const badges = {
+
+ 'azure_openai': '<span class="method-badge azure-badge">Azure OpenAI</span>',
+
+ 'sentence_transformer': '<span class="method-badge sentence-badge">Sentence Transformer</span>',
+
+ 'reranked': '<span class="method-badge rerank-badge">Re-ranked</span>'
+
+ };
+
+ return badges[method] || '<span class="method-badge bg-gray-500 text-white">Unknown</span>';
+
+ }
+
+ function formatKey(key) {
+
+ return key.split('_').map(word =>
+
+ word.charAt(0).toUpperCase() + word.slice(1)
+
+ ).join(' ');
+
+ }
+
+ function formatValue(value) {
+
+ if (value === null || value === undefined) return 'N/A';
+
+ if (typeof value === 'string' && value.length > 100) {
+
+ return value.substring(0, 100) + '...';
+
+ }
+
+ return String(value);
+
+ }
+
+ function renderPatternAnalysis(patterns) {
+
+ if (!patterns || patterns.count === 0) {
+
+ return '<p class="text-gray-600">No patterns found in retrieved documents.</p>';
+
+ }
+
+ let html = `<div class="mb-4">
+
+ <p class="text-lg font-medium text-gray-800">Found ${patterns.count} relevant documents</p>
+
+ </div>`;
+
+ if (patterns.date_range) {
+
+ const dateRange = patterns.date_range;
+
+ html += `<div class="mb-4 p-3 bg-blue-50 rounded-lg">
+
+  <h4 class="font-medium text-blue-800 mb-2">Date Range Analysis</h4>
+
+  <p class="text-blue-700 text-sm">
+
+  Records span from ${dateRange.min_date} to ${dateRange.max_date}
+
+  (${dateRange.span_days} days) in the ${formatKey(dateRange.column)} field
+
+  </p>
+
+ </div>`;
+
+ }
+
+ if (patterns.patterns && Object.keys(patterns.patterns).length > 0) {
+
+ html += '<div class="space-y-3">';
+
+ html += '<h4 class="font-medium text-gray-800">Common Patterns:</h4>';
+
+ Object.entries(patterns.patterns).forEach(([field, values]) => {
+
+  const sortedValues = Object.entries(values).sort((a, b) => b[1] - a[1]);
+
+  html += `<div class="p-3 bg-gray-50 rounded-lg">
+
+  <h5 class="font-medium text-gray-700 mb-2">${formatKey(field)}</h5>
+
+  <div class="space-y-1">
+
+  ${sortedValues.slice(0, 5).map(([value, count]) =>
+
+  `<div class="flex justify-between text-sm">
+
+   <span class="text-gray-600">${value}</span>
+
+   <span class="font-medium text-gray-800">${count} occurrences</span>
+
+  </div>`
+
+  ).join('')}
+
+  </div>
+
+  </div>`;
+
+ });
+
+ html += '</div>';
+
+ }
+
+ return html;
+
+ }
+
+ function beautifyResponse(text) {
+
+ // Convert markdown-like formatting to HTML
+
+ return text
+
+ .split('\n\n')
+
+ .filter(p => p.trim())
+
+ .map(p => {
+
+  // Handle bullet points
+
+  if (p.includes('•') || p.match(/^\d+\./)) {
+
+  const lines = p.split('\n').map(line => line.trim()).filter(line => line);
+
+  return `<ul class="list-disc list-inside mb-4 space-y-1">${lines.map(line => `<li class="text-gray-700">${line.replace(/^[•\-\*]\s*/, '').replace(/^\d+\.\s*/, '')}</li>`).join('')}</ul>`;
+
+  }
+
+  // Handle bold text
+
+  p = p.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+
+  // Regular paragraphs
+
+  return `<p class="mb-4 text-gray-700 leading-relaxed">${p}</p>`;
+
+ })
+
+ .join('');
+
+ }
+
+ // API Functions
+
+ async function performQuery(endpoint = 'query') {
+
+ const query = queryInput.value.trim();
+
+ if (!query) {
+
+ showError('Please enter a query.');
+
+ return;
+
+ }
+
+ hideError();
+
+ resultsArea.style.display = 'none';
+
+ const isFullQuery = endpoint === 'query';
+
+ const button = isFullQuery ? submitButton : retrieveButton;
+
+ const originalText = isFullQuery ? 'Generate Response' : 'Retrieve Documents Only';
+
+ showLoading(button);
+
+ log(`Sending ${isFullQuery ? 'full query' : 'retrieval request'}: "${query}"`);
+
+ try {
+
+ const requestBody = {
+
+  query: query,
+
+  k: parseInt(document.getElementById('kValue').value),
+
+  temperature: parseFloat(document.getElementById('temperature').value),
+
+  analytical_mode: analyticalModeEnabled
+
+ };
+
+ // Add analytical mode parameters if enabled
+
+ if (analyticalModeEnabled) {
+
+  log('Using Analytical Thinking Mode - will analyze system data directly', 'info');
+
+ }
+
+ const response = await fetch(getApiUrl(endpoint), {
+
+  method: 'POST',
+
+  headers: {
+
+  'Content-Type': 'application/json',
+
+  'Accept': 'application/json'
+
+  },
+
+  body: JSON.stringify(requestBody)
+
+ });
+
+ if (!response.ok) {
+
+  const errorData = await response.json().catch(() => null);
+
+  throw new Error(errorData?.detail || `HTTP error! status: ${response.status}`);
+
+ }
+
+ const data = await response.json();
+
+ currentData = data;
+
+ log(`${isFullQuery ? 'Query' : 'Retrieval'} completed successfully`, 'success');
+
+ // Update UI
+
+ resultsArea.style.display = 'block';
+
+ if (isFullQuery && data.response) {
+
+  // Update response card title based on mode
+
+  document.getElementById('responseIcon').textContent = analyticalModeEnabled ? '🧠' : '🤖';
+
+  document.getElementById('responseTitle').textContent = analyticalModeEnabled ? 'Analytical Response' : 'AI Response';
+
+  responseDiv.innerHTML = beautifyResponse(data.response);
+
+ } else {
+
+  document.getElementById('responseCard').style.display = 'none';
+
+ }
+
+ // Handle analytical results
+
+ if (analyticalModeEnabled && data.analytical_results) {
+
+  displayAnalyticalResults(data.analytical_results);
+
+  document.getElementById('analyticalCard').style.display = 'block';
+
+ } else {
+
+  document.getElementById('analyticalCard').style.display = 'none';
+
+ }
+
+ // Update documents (only show if not in analytical mode)
+
+ if (!analyticalModeEnabled && data.retrieved_docs && data.retrieved_docs.length > 0) {
+
+  docCount.textContent = data.retrieved_docs.length;
+
+  updateDocuments(data.retrieved_docs);
+
+  document.getElementById('documentsCard').style.display = 'block';
+
+ } else if (analyticalModeEnabled) {
+
+  document.getElementById('documentsCard').style.display = 'none';
+
+ }
+
+ // Update pattern analysis (only show if not in analytical mode)
+
+ if (!analyticalModeEnabled && data.pattern_analysis) {
+
+  patternAnalysis.innerHTML = renderPatternAnalysis(data.pattern_analysis);
+
+  patternCard.style.display = 'block';
+
+ } else if (analyticalModeEnabled) {
+
+  patternCard.style.display = 'none';
+
+ }
+
+ } catch (error) {
+
+ showError(`Failed to process request: ${error.message}`);
+
+ } finally {
+
+ hideLoading(button, originalText);
+
+ }
+
+ }
+
+ function displayAnalyticalResults(results) {
+
+ if (!results) {
+
+ document.getElementById('analyticalResults').innerHTML = '<p class="text-gray-600">No analytical results available.</p>';
+
+ return;
+
+ }
+
+ let html = '';
+
+ // Display key metrics
+
+ if (results.metrics) {
+
+ html += '<div class="mb-6">';
+
+ html += '<h4 class="text-lg font-semibold text-gray-800 mb-3">Key Metrics</h4>';
+
+ html += '<div class="grid grid-cols-2 md:grid-cols-4 gap-4">';
+
+ Object.entries(results.metrics).forEach(([key, value]) => {
+
+  html += `
+
+  <div class="bg-gradient-to-r from-purple-100 to-blue-100 p-4 rounded-lg text-center">
+
+  <div class="text-2xl font-bold text-purple-800">${value}</div>
+
+  <div class="text-sm text-purple-600">${formatKey(key)}</div>
+
+  </div>`;
+
+ });
+
+ html += '</div></div>';
+
+ }
+
+ // Display data summary
+
+ if (results.summary) {
+
+ html += '<div class="mb-6">';
+
+ html += '<h4 class="text-lg font-semibold text-gray-800 mb-3">Analysis Summary</h4>';
+
+ html += `<div class="bg-gray-50 p-4 rounded-lg">`;
+
+ Object.entries(results.summary).forEach(([key, value]) => {
+
+  html += `<div class="mb-2"><span class="font-medium text-gray-700">${formatKey(key)}:</span> <span class="text-gray-600">${value}</span></div>`;
+
+ });
+
+ html += '</div></div>';
+
+ }
+
+ // Display sample data
+
+ if (results.sample_data && Array.isArray(results.sample_data) && results.sample_data.length > 0) {
+
+ html += '<div class="mb-6">';
+
+ html += '<h4 class="text-lg font-semibold text-gray-800 mb-3">Sample Data</h4>';
+
+ html += '<div class="overflow-x-auto">';
+
+ html += '<table class="min-w-full bg-white border border-gray-200 rounded-lg">';
+
+ // Table header
+
+ const headers = Object.keys(results.sample_data[0]);
+
+ html += '<thead class="bg-gray-50"><tr>';
+
+ headers.forEach(header => {
+
+  html += `<th class="px-4 py-2 text-left text-sm font-medium text-gray-700 border-b">${formatKey(header)}</th>`;
+
+ });
+
+ html += '</tr></thead>';
+
+ // Table body
+
+ html += '<tbody>';
+
+ results.sample_data.slice(0, 5).forEach((row, index) => {
+
+  html += `<tr class="${index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}">`;
+
+  headers.forEach(header => {
+
+  html += `<td class="px-4 py-2 text-sm text-gray-600 border-b">${formatValue(row[header])}</td>`;
+
+  });
+
+  html += '</tr>';
+
+ });
+
+ html += '</tbody></table>';
+
+ html += '</div></div>';
+
+ }
+
+ document.getElementById('analyticalResults').innerHTML = html;
+
+ }
+
+ // Event Listeners
+
+ submitButton.addEventListener('click', () => performQuery('query'));
+
+ retrieveButton.addEventListener('click', () => performQuery('retrieve'));
+
+ // Analytical mode toggle handler
+
+ document.getElementById('analyticalMode').addEventListener('change', (e) => {
+
+ analyticalModeEnabled = e.target.checked;
+
+ const details = document.getElementById('analyticalModeDetails');
+
+ details.style.display = analyticalModeEnabled ? 'block' : 'none';
+
+ log(`Analytical Thinking Mode ${analyticalModeEnabled ? 'enabled' : 'disabled'}`, 'info');
+
+ // Update button text based on mode
+
+ const queryText = document.getElementById('queryText');
+
+ if (analyticalModeEnabled) {
+
+ queryText.textContent = 'Analyze Data';
+
+ } else {
+
+ queryText.textContent = 'Generate Response';
+
+ }
+
+ });
+
+ document.getElementById('refreshStatus').addEventListener('click', () => {
+
+ document.getElementById('refreshIcon').style.transform = 'rotate(360deg)';
+
+ setTimeout(() => {
+
+ document.getElementById('refreshIcon').style.transform = 'rotate(0deg)';
+
+ }, 500);
+
+ updateSystemStatus();
+
+ });
+
+ document.getElementById('checkHealth').addEventListener('click', async () => {
+
+ try {
+
+ const response = await fetch(getApiUrl('health'));
+
+ const data = await response.json();
+
+ log(`Health check: ${data.status} - System initialized: ${data.system_initialized}`, 'success');
+
+ } catch (error) {
+
+ log(`Health check failed: ${error.message}`, 'error');
+
+ }
+
+ });
+
+ document.getElementById('rebuildIndex').addEventListener('click', async () => {
+
+ if (!confirm('Are you sure you want to rebuild the index? This may take some time.')) return;
+
+ try {
+
+ log('Starting index rebuild...', 'info');
+
+ const response = await fetch(getApiUrl('rebuild-index'), {
+
+  method: 'POST',
+
+  headers: { 'Content-Type': 'application/json' },
+
+  body: JSON.stringify({ force_rebuild: true })
+
+ });
+
+ if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+ const data = await response.json();
+
+ log('Index rebuild completed successfully', 'success');
+
+ updateSystemStatus();
+
+ } catch (error) {
+
+ log(`Index rebuild failed: ${error.message}`, 'error');
+
+ }
+
+ });
+
+ document.getElementById('initializeSystem').addEventListener('click', async () => {
+
+ const filePath = prompt('Enter Excel file path:', 'data/sample_data.xlsx');
+
+ if (!filePath) return;
+
+ try {
+
+ log('Initializing system...', 'info');
+
+ const response = await fetch(getApiUrl('initialize'), {
+
+  method: 'POST',
+
+  headers: { 'Content-Type': 'application/json' },
+
+  body: JSON.stringify({
+
+  excel_file_path: filePath,
+
+  temperature: 0.7,
+
+  use_sentence_transformers: true,
+
+  use_reranker: true
+
+  })
+
+ });
+
+ if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+
+ const data = await response.json();
+
+ log('System initialized successfully', 'success');
+
+ updateSystemStatus();
+
+ } catch (error) {
+
+ log(`System initialization failed: ${error.message}`, 'error');
+
+ }
+
+ });
+
+ document.getElementById('clearLogs').addEventListener('click', () => {
+
+ debugLogs.innerHTML = 'Logs cleared...';
+
+ });
+
+ document.getElementById('toggleDebug').addEventListener('click', () => {
+
+ const console = document.getElementById('debugConsole');
+
+ console.classList.toggle('expanded');
+
+ });
+
+ document.getElementById('toggleDocs').addEventListener('click', () => {
+
+ docsExpanded = !docsExpanded;
+
+ const button = document.getElementById('toggleDocs');
+
+ button.textContent = docsExpanded ? 'Hide Details' : 'Show Details';
+
+ if (currentData && currentData.retrieved_docs) {
+
+ updateDocuments(currentData.retrieved_docs);
+
+ }
+
+ });
+
+ // Allow Enter key to submit query
+
+ queryInput.addEventListener('keydown', (e) => {
+
+ if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+
+ e.preventDefault();
+
+ performQuery('query');
+
+ }
+
+ });
+
+ // Initialize
+
+ document.addEventListener('DOMContentLoaded', () => {
+
+ log('Enhanced Azure RAG System Frontend loaded', 'success');
+
+ updateSystemStatus();
+
+ });
+
+ </script>
+
+</body>
+
+</html>
+
