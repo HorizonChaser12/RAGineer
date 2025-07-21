@@ -16,7 +16,8 @@ The Enhanced Azure RAG System is a powerful, production-ready AI platform for en
 
 ## Demo
 
- <!-- Add an actual screenshot for best results -->
+ <img width="1899" height="915" alt="image" src="https://github.com/user-attachments/assets/9fd327ed-1e6d-4795-8d0d-2e452fc5a621" />
+
 
 ## Table of Contents
 
