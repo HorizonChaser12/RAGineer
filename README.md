@@ -90,8 +90,8 @@ The Enhanced Azure RAG System is a powerful, production-ready AI platform for en
 1. **Clone the Repository**
 
     ```
-    git clone https://github.com/yourusername/insightbridge.git
-    cd insightbridge
+    git clone https://github.com/yourusername/RAGineer.git
+    cd RAGineer
     ```
 
 2. **Install Dependencies**
