@@ -162,8 +162,8 @@ AZURE_OPENAI_DEPLOYMENT=your-deployment
 
 ## Contributing
 
-Contributions, issues, and feature requests are welcome!  
-Please open a pull request or file an issue for discussion.
+- Contributions, issues, and feature requests are welcome!  
+- Please open a pull request or file an issue for discussion.
 
 ## Acknowledgments
 
