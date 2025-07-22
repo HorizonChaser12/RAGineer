@@ -167,5 +167,5 @@ Please open a pull request or file an issue for discussion.
 
 ## Acknowledgments
 
-- TCS Aviva for giving me opportunity to work on this project.
-- OpenAI, Huggingface, and the open-source community for models, APIs, and libraries.
+TCS Aviva for giving me opportunity to work on this project.
+OpenAI, Huggingface, and the open-source community for models, APIs, and libraries.
