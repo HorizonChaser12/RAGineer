@@ -1,10 +1,10 @@
-# Enhanced Azure RAG System
+# RAGineer
 
 **Advanced Retrieval-Augmented Generation (RAG) System with Hybrid Retrieval, AI Re-Ranking, and Analytical Insights**
 
 ## Overview
 
-The Enhanced Azure RAG System is a powerful, production-ready AI platform for enterprise knowledge retrieval, document search, and analytics. It combines state-of-the-art OpenAI models (via Azure), Sentence Transformers, FAISS vector search, Cross-Encoder re-ranking, and direct data analytics to deliver accurate, explainable answers for business users and technical support scenarios.
+The Enhanced Azure RAG System is a powerful, AI platform for knowledge retrieval, document search, and analytics. It combines state-of-the-art OpenAI models (via Azure, Gemini), Sentence Transformers, FAISS vector search, Cross-Encoder re-ranking, and direct data analytics to deliver accurate, explainable answers for users and technical support scenarios.
 
 **Key Features:**
 - Hybrid retrieval using Azure OpenAI embeddings and Sentence Transformers.
