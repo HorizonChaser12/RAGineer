@@ -4,8 +4,10 @@ import pandas as pd
 import faiss
 from dotenv import load_dotenv
 from langchain_openai import AzureOpenAIEmbeddings, AzureChatOpenAI
+from langchain_google_genai import GoogleGenerativeAI, GoogleGenerativeAIEmbeddings
 from langchain.prompts import PromptTemplate
 from langchain.chains import LLMChain
+from typing import Union, Optional
 from typing import List, Dict, Any, Optional, Union
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
@@ -21,230 +23,293 @@ import torch
 
 # Configure logging to file only
 logging.basicConfig(
-
- level=logging.INFO,
-
- format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-
- filename='azure_rag_system_api.log',
-
- filemode='a'
-
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    filename="azure_rag_system_api.log",
+    filemode="a",
 )
 
 logger = logging.getLogger(__name__)
 
 load_dotenv()
 
-# Load Azure OpenAI environment variables
+# API Provider Configuration
+API_PROVIDER = os.getenv("API_PROVIDER", "azure").lower()  # 'azure' or 'google'
 
-AZURE_API_KEY = os.getenv("AZURE_OPENAI_API_KEY")
+# Hugging Face configuration
+HUGGINGFACE_TOKEN = os.getenv("HUGGINGFACE_TOKEN")
+if not HUGGINGFACE_TOKEN:
+    logger.warning(
+        "Hugging Face token not found in .env file. Sentence transformers and reranker may not work properly."
+    )
+else:
+    os.environ["HUGGINGFACE_HUB_TOKEN"] = HUGGINGFACE_TOKEN
 
-AZURE_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT")
+# Azure OpenAI environment variables
+AZURE_CONFIG = {
+    "api_key": os.getenv("AZURE_OPENAI_API_KEY"),
+    "endpoint": os.getenv("AZURE_OPENAI_ENDPOINT"),
+    "api_version": os.getenv("AZURE_OPENAI_API_VERSION"),
+    "llm_deployment": os.getenv("AZURE_OPENAI_DEPLOYMENT"),
+    "embedding_deployment": os.getenv("AZURE_DEPLOYMENT_EMBEDDINGS"),
+    "embedding_api_version": os.getenv("AZURE_EMBEDDING_API_VERSION"),
+    "embedding_endpoint": os.getenv("AZURE_EMBEDDING_ENDPOINT"),
+}
 
-AZURE_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION")
+# Google API environment variables
+GOOGLE_CONFIG = {
+    "api_key": os.getenv("GOOGLE_API_KEY"),
+    "llm_model": "gemini-2.0-flash",
+    "embedding_model": "gemini-embedding-001",
+}
 
-AZURE_LLM_DEPLOYMENT = os.getenv("AZURE_OPENAI_DEPLOYMENT")
 
-AZURE_EMBEDDING_DEPLOYMENT = os.getenv("AZURE_DEPLOYMENT_EMBEDDINGS")
+def validate_credentials():
+    logger.info(f"Current API Provider: {API_PROVIDER}")
+    if API_PROVIDER == "azure" and (
+        not AZURE_CONFIG["api_key"] or not AZURE_CONFIG["endpoint"]
+    ):
+        logger.warning(
+            "Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set."
+        )
+        return False
+    elif API_PROVIDER == "google" and not GOOGLE_CONFIG["api_key"]:
+        logger.warning(
+            "Google API credentials not found in .env file. Ensure GOOGLE_API_KEY is set."
+        )
+        return False
+    elif API_PROVIDER == "google" and GOOGLE_CONFIG["api_key"]:
+        logger.info("Google API credentials found.")
+    return True
 
-AZURE_EMBEDDING_API_VERSION = os.getenv("AZURE_EMBEDDING_API_VERSION")
 
-AZURE_EMBEDDING_ENDPOINT = os.getenv("AZURE_EMBEDDING_ENDPOINT")
+validate_credentials()
 
-if not AZURE_API_KEY or not AZURE_ENDPOINT:
-
- logger.warning("Azure OpenAI credentials not found in .env file. Ensure AZURE_OPENAI_API_KEY and AZURE_OPENAI_ENDPOINT are set.")
 
 # --- Utility function for JSON serialization ---
-
 def make_serializable(obj: Any) -> Any:
+    """ "
+    Recursively converts non-serializable objects (like datetime, numpy types)
+    in a data structure to JSON-serializable types.
+    """
 
- """
+    if isinstance(obj, (datetime.date, datetime.datetime, pd.Timestamp)):
 
- Recursively converts non-serializable objects (like datetime, numpy types)
+        return obj.isoformat()
 
- in a data structure to JSON-serializable types.
+    if isinstance(obj, dict):
 
- """
+        return {make_serializable(k): make_serializable(v) for k, v in obj.items()}
 
- if isinstance(obj, (datetime.date, datetime.datetime, pd.Timestamp)):
+    if isinstance(obj, list):
 
-  return obj.isoformat()
+        return [make_serializable(i) for i in obj]
 
- if isinstance(obj, dict):
+    if isinstance(obj, (np.ndarray, np.generic)):
 
-  return {make_serializable(k): make_serializable(v) for k, v in obj.items()}
+        return obj.tolist()
 
- if isinstance(obj, list):
+    if isinstance(obj, torch.Tensor):
 
-  return [make_serializable(i) for i in obj]
+        return obj.detach().cpu().numpy().tolist()
 
- if isinstance(obj, (np.ndarray, np.generic)):
+    return obj
 
-  return obj.tolist()
-
- if isinstance(obj, torch.Tensor):
-
-  return obj.detach().cpu().numpy().tolist()
-
- return obj
 
 class EnhancedAdaptiveRAGSystem:
 
- def __init__(self, excel_file_path: str, temperature: float = 0.7, concise_prompt: bool = False,
+    def __init__(
+        self,
+        excel_file_path: str,
+        temperature: float = 0.7,
+        concise_prompt: bool = False,
+        index_file: str = "faiss_index.bin",
+        use_sentence_transformers: bool = True,
+        use_reranker: bool = True,
+        sentence_transformer_model: str = "sentence-transformers/all-MiniLM-L6-v2",
+        reranker_model: str = "cross-encoder/ms-marco-MiniLM-L6-v2",
+    ):
 
-     index_file: str = "Azure_Implementation/faiss_index_azure.bin",
+        self.excel_file_path = excel_file_path
 
-     use_sentence_transformers: bool = True, use_reranker: bool = True,
+        self.concise_prompt = concise_prompt
 
-     sentence_transformer_model: str = "all-MiniLM-L6-v2",
+        self.index_file = index_file
 
-     reranker_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"):
+        self.chunk_to_original_doc_mapping: List[int] = []
 
-  self.excel_file_path = excel_file_path
+        self.use_sentence_transformers = use_sentence_transformers
 
-  self.concise_prompt = concise_prompt
+        self.use_reranker = use_reranker
 
-  self.index_file = index_file
+        # Initialize sentence transformer and reranker models
 
-  self.chunk_to_original_doc_mapping: List[int] = []
+        if self.use_sentence_transformers:
 
-  self.use_sentence_transformers = use_sentence_transformers
+            logger.info(
+                f"Loading sentence transformer model: {sentence_transformer_model}"
+            )
 
-  self.use_reranker = use_reranker
+            try:
+                if not HUGGINGFACE_TOKEN:
+                    logger.warning(
+                        "No Hugging Face token available. Model download may fail."
+                    )
 
-  # Initialize sentence transformer and reranker models
+                self.sentence_transformer = SentenceTransformer(
+                    sentence_transformer_model, token=HUGGINGFACE_TOKEN
+                )
 
-  if self.use_sentence_transformers:
+                logger.info("Sentence transformer model loaded successfully")
 
-   logger.info(f"Loading sentence transformer model: {sentence_transformer_model}")
+            except Exception as e:
 
-   try:
+                logger.error(f"Failed to load sentence transformer: {e}")
 
-    self.sentence_transformer = SentenceTransformer(sentence_transformer_model)
+                self.sentence_transformer = None
 
-    logger.info("Sentence transformer model loaded successfully")
+                self.use_sentence_transformers = False
 
-   except Exception as e:
+        else:
 
-    logger.error(f"Failed to load sentence transformer: {e}")
+            self.sentence_transformer = None
 
-    self.sentence_transformer = None
+        if self.use_reranker:
 
-    self.use_sentence_transformers = False
+            logger.info(f"Loading reranker model: {reranker_model}")
 
-  else:
+            try:
+                if not HUGGINGFACE_TOKEN:
+                    logger.warning(
+                        "No Hugging Face token available. Model download may fail."
+                    )
 
-   self.sentence_transformer = None
+                self.reranker = CrossEncoder(reranker_model, token=HUGGINGFACE_TOKEN)
 
-  if self.use_reranker:
+                logger.info("Reranker model loaded successfully")
 
-   logger.info(f"Loading reranker model: {reranker_model}")
+            except Exception as e:
 
-   try:
+                logger.error(f"Failed to load reranker: {e}")
 
-    self.reranker = CrossEncoder(reranker_model)
+                self.reranker = None
 
-    logger.info("Reranker model loaded successfully")
+                self.use_reranker = False
 
-   except Exception as e:
+        else:
 
-    logger.error(f"Failed to load reranker: {e}")
+            self.reranker = None
 
-    self.reranker = None
+        # Initialize models based on configuration
+        logger.info("Initializing AI models")
 
-    self.use_reranker = False
+        try:
+            if API_PROVIDER == "google":
+                logger.info("Initializing Google Gemini models")
+                logger.info(
+                    f"Using Google API key (first 4 chars): {GOOGLE_CONFIG['api_key'][:4]}..."
+                )
+                try:
+                    self.embedding_model = GoogleGenerativeAIEmbeddings(
+                        model="models/embedding-001",  # Required model name for Google's text embeddings
+                        google_api_key=GOOGLE_CONFIG["api_key"],
+                    )
+                    logger.info("Google embeddings model initialized successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize Google embeddings model: {e}")
+                    raise
 
-  else:
+                try:
+                    self.llm = GoogleGenerativeAI(
+                        model=GOOGLE_CONFIG["llm_model"],
+                        google_api_key=GOOGLE_CONFIG["api_key"],
+                        temperature=temperature,
+                    )
+                    logger.info("Google Gemini chat model initialized successfully")
+                except Exception as e:
+                    logger.error(f"Failed to initialize Google chat model: {e}")
+                    raise
 
-   self.reranker = None
+                logger.info("Google Gemini Models initialized successfully.")
+            else:
+                logger.info("Initializing Azure OpenAI models")
+                self.embedding_model = AzureOpenAIEmbeddings(
+                    azure_deployment=AZURE_CONFIG["embedding_deployment"],
+                    openai_api_version=AZURE_CONFIG["embedding_api_version"],
+                    azure_endpoint=AZURE_CONFIG["embedding_endpoint"],
+                    api_key=AZURE_CONFIG["api_key"],
+                )
 
-  # Initialize Azure OpenAI models
+                self.llm = AzureChatOpenAI(
+                    azure_deployment=AZURE_CONFIG["llm_deployment"],
+                    openai_api_version=AZURE_CONFIG["api_version"],
+                    azure_endpoint=AZURE_CONFIG["endpoint"],
+                    api_key=AZURE_CONFIG["api_key"],
+                    temperature=temperature,
+                )
+                logger.info("Azure OpenAI Models initialized successfully.")
 
-  logger.info(f"Initializing Azure OpenAI models")
+        except Exception as e:
 
-  try:
+            logger.error(f"Fatal: Failed to initialize Azure OpenAI models: {e}.")
 
-   self.embedding_model = AzureOpenAIEmbeddings(
+            self.embedding_model = None
 
-    azure_deployment=AZURE_EMBEDDING_DEPLOYMENT,
+            self.llm = None
 
-    openai_api_version=AZURE_EMBEDDING_API_VERSION,
+        self.data = None
 
-    azure_endpoint=AZURE_EMBEDDING_ENDPOINT,
+        self.metadata: Optional[List[Dict[Any, Any]]] = None
 
-    api_key=AZURE_API_KEY
+        self.index = None
 
-   )
+        self.st_embeddings = None  # Store sentence transformer embeddings
 
-   self.llm = AzureChatOpenAI(
+        # Use 1536 for Azure OpenAI Ada-002 embeddings, but will be updated based on actual model
 
-    azure_deployment=AZURE_LLM_DEPLOYMENT,
+        self.dimension = 1536
 
-    openai_api_version=AZURE_API_VERSION,
+        self.column_info: Dict[str, Dict[str, Any]] = {}
 
-    azure_endpoint=AZURE_ENDPOINT,
+        if (self.embedding_model and self.llm) or (self.sentence_transformer):
 
-    api_key=AZURE_API_KEY,
+            self._load_data()
 
-    temperature=temperature
+            try:
 
-   )
+                logger.info(f"Attempting to load FAISS index from {self.index_file}...")
 
-   logger.info("Azure OpenAI Models initialized successfully.")
+                self._load_index(self.index_file)
 
-  except Exception as e:
+                if (
+                    not self.chunk_to_original_doc_mapping
+                    and self.data is not None
+                    and "combined_text" in self.data.columns
+                ):
 
-   logger.error(f"Fatal: Failed to initialize Azure OpenAI models: {e}.")
+                    logger.info(
+                        "Re-populating chunk_to_original_doc_mapping after loading index."
+                    )
 
-   self.embedding_model = None
+                    self._populate_chunk_mapping_from_data()
 
-   self.llm = None
+            except Exception as e:
 
-  self.data = None
+                logger.warning(
+                    f"Could not load persisted index from {self.index_file} (Reason: {e}). Building new index..."
+                )
 
-  self.metadata: Optional[List[Dict[Any, Any]]] = None
+                self._build_index()
 
-  self.index = None
+        else:
 
-  self.st_embeddings = None # Store sentence transformer embeddings
+            logger.error(
+                "Skipping data loading and index building due to model initialization failure."
+            )
 
-  # Use 1536 for Azure OpenAI Ada-002 embeddings, but will be updated based on actual model
+        if self.llm:
 
-  self.dimension = 1536
-
-  self.column_info: Dict[str, Dict[str, Any]] = {}
-
-  if (self.embedding_model and self.llm) or (self.sentence_transformer):
-
-   self._load_data()
-
-   try:
-
-    logger.info(f"Attempting to load FAISS index from {self.index_file}...")
-
-    self._load_index(self.index_file)
-
-    if not self.chunk_to_original_doc_mapping and self.data is not None and 'combined_text' in self.data.columns:
-
-     logger.info("Re-populating chunk_to_original_doc_mapping after loading index.")
-
-     self._populate_chunk_mapping_from_data()
-
-   except Exception as e:
-
-    logger.warning(f"Could not load persisted index from {self.index_file} (Reason: {e}). Building new index...")
-
-    self._build_index()
-
-  else:
-
-   logger.error("Skipping data loading and index building due to model initialization failure.")
-
-  if self.llm:
-
-   self.response_template = """
+            self.response_template = """
 
    You are a helpful technical support assistant. Your goal is to provide comprehensive and accurate answers based on the information available.
 
@@ -292,1314 +357,1147 @@ class EnhancedAdaptiveRAGSystem:
 
    """
 
-   self.prompt = PromptTemplate(
+            self.prompt = PromptTemplate(
+                input_variables=[
+                    "dataset_overview",
+                    "retrieved_documents_context",
+                    "pattern_analysis_summary",
+                    "query",
+                ],
+                template=self.response_template,
+                validate_template=True,
+            )
 
-    input_variables=["dataset_overview", "retrieved_documents_context", "pattern_analysis_summary", "query"],
+            self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
 
-    template=self.response_template,
+            logger.info("LLMChain initialized with comprehensive prompt.")
 
-    validate_template=True
+        else:
 
-   )
+            self.chain = None
 
-   self.chain = LLMChain(llm=self.llm, prompt=self.prompt)
+            logger.error(
+                "LLMChain could not be initialized because LLM is not available."
+            )
 
-   logger.info("LLMChain initialized with comprehensive prompt.")
+    def _generate_dataset_overview_summary(self) -> str:
+        """Generates a textual summary of the dataset's structure."""
 
-  else:
+        if self.data is None or self.metadata is None:
 
-   self.chain = None
+            return "Dataset information is currently unavailable."
 
-   logger.error("LLMChain could not be initialized because LLM is not available.")
+        num_records = len(self.metadata)
 
- def _generate_dataset_overview_summary(self) -> str:
+        summary_parts = [
+            f"The dataset contains {num_records} records (e.g., rows or entries)."
+        ]
 
-  """Generates a textual summary of the dataset's structure."""
+        if not self.column_info:
 
-  if self.data is None or self.metadata is None:
+            summary_parts.append("Column details are not analyzed.")
 
-   return "Dataset information is currently unavailable."
+            return "\n".join(summary_parts)
 
-  num_records = len(self.metadata)
+        summary_parts.append("It has the following columns:")
 
-  summary_parts = [f"The dataset contains {num_records} records (e.g., rows or entries)."]
+        for col_name, info in self.column_info.items():
 
-  if not self.column_info:
+            col_desc = f"- '{col_name}': Type: {info.get('data_type', 'N/A')}"
 
-   summary_parts.append("Column details are not analyzed.")
+            if "semantic_type" in info:
 
-   return "\n".join(summary_parts)
+                col_desc += f", Semantic Role: {info.get('semantic_type')}"
 
-  summary_parts.append("It has the following columns:")
+            if (
+                "categories" in info
+                and isinstance(info["categories"], list)
+                and info["categories"]
+            ):
 
-  for col_name, info in self.column_info.items():
+                preview_cats = info["categories"][:3]
 
-   col_desc = f"- '{col_name}': Type: {info.get('data_type', 'N/A')}"
+                etc_cats = "..." if len(info["categories"]) > 3 else ""
 
-   if 'semantic_type' in info:
+                col_desc += f" (e.g., {', '.join(map(str, preview_cats))}{etc_cats})"
 
-    col_desc += f", Semantic Role: {info.get('semantic_type')}"
+            summary_parts.append(col_desc)
 
-   if 'categories' in info and isinstance(info['categories'], list) and info['categories']:
+        return "\n".join(summary_parts)
 
-    preview_cats = info['categories'][:3]
+    def _load_data(self):
 
-    etc_cats = "..." if len(info['categories']) > 3 else ""
+        logger.info(f"Loading data from {self.excel_file_path}...")
 
-    col_desc += f" (e.g., {', '.join(map(str, preview_cats))}{etc_cats})"
+        if not os.path.exists(self.excel_file_path):
 
-   summary_parts.append(col_desc)
+            logger.error(f"Excel file not found: {self.excel_file_path}")
 
-  return "\n".join(summary_parts)
+            self.data = pd.DataFrame(
+                {"Error": [f"File not found: {self.excel_file_path}"]}
+            )
 
- def _load_data(self):
+            self._prepare_data()
 
-  logger.info(f"Loading data from {self.excel_file_path}...")
+            self.metadata = self.data.to_dict(orient="records")
 
-  if not os.path.exists(self.excel_file_path):
+            logger.warning("Proceeding with dummy data due to missing Excel file.")
 
-   logger.error(f"Excel file not found: {self.excel_file_path}")
+            return
 
-   self.data = pd.DataFrame({'Error': [f'File not found: {self.excel_file_path}']})
+        try:
 
-   self._prepare_data()
+            excel_data = pd.read_excel(self.excel_file_path, sheet_name=None)
 
-   self.metadata = self.data.to_dict(orient='records')
+            self.data = None
 
-   logger.warning("Proceeding with dummy data due to missing Excel file.")
+            for sheet_name, df in excel_data.items():
 
-   return
+                if not df.empty:
 
-  try:
+                    self.data = df
 
-   excel_data = pd.read_excel(self.excel_file_path, sheet_name=None)
+                    logger.info(
+                        f"Using sheet '{sheet_name}' ({len(df)}x{len(df.columns)})"
+                    )
 
-   self.data = None
+                    break
 
-   for sheet_name, df in excel_data.items():
+            if self.data is None:
 
-    if not df.empty:
+                logger.error("No non-empty sheets in Excel. Creating dummy data.")
 
-     self.data = df
+                self.data = pd.DataFrame({"Error": ["No non-empty sheets in Excel."]})
 
-     logger.info(f"Using sheet '{sheet_name}' ({len(df)}x{len(df.columns)})")
+            self._prepare_data()
 
-     break
+            self.metadata = self.data.to_dict(orient="records")
 
-   if self.data is None:
+            logger.info(f"Loaded {len(self.data)} records.")
 
-    logger.error("No non-empty sheets in Excel. Creating dummy data.")
+        except Exception as e:
 
-    self.data = pd.DataFrame({'Error': ['No non-empty sheets in Excel.']})
+            logger.error(f"Error loading data: {e}", exc_info=True)
 
-   self._prepare_data()
+            self.data = pd.DataFrame({"Error": [f"Error loading data: {str(e)}"]})
 
-   self.metadata = self.data.to_dict(orient='records')
+            self._prepare_data()
 
-   logger.info(f"Loaded {len(self.data)} records.")
+            self.metadata = self.data.to_dict(orient="records")
 
-  except Exception as e:
+    def _prepare_data(self):
 
-   logger.error(f"Error loading data: {e}", exc_info=True)
+        if self.data is None:
 
-   self.data = pd.DataFrame({'Error': [f'Error loading data: {str(e)}']})
+            logger.error("Cannot prepare data: self.data is None.")
 
-   self._prepare_data()
+            return
 
-   self.metadata = self.data.to_dict(orient='records')
+        self.data = self.data.fillna("")
 
- def _prepare_data(self):
+        self.data = self.data.dropna(how="all").dropna(axis=1, how="all")
 
-  if self.data is None:
+        self._analyze_columns()
 
-   logger.error("Cannot prepare data: self.data is None.")
+        self.data["combined_text"] = self.data.apply(
+            lambda row: " ".join(
+                f"{col}: {val}"
+                for col, val in row.items()
+                if str(val).strip() != "" and col != "combined_text"
+            ),
+            axis=1,
+        )
 
-   return
+        logger.info("Data preparation complete. 'combined_text' created.")
 
-  self.data = self.data.fillna('')
+    def _analyze_columns(self):
 
-  self.data = self.data.dropna(how='all').dropna(axis=1, how='all')
+        if self.data is None:
+            return
 
-  self._analyze_columns()
+        logger.info("Analyzing data columns...")
 
-  self.data['combined_text'] = self.data.apply(
+        self.column_info = {}
 
-   lambda row: ' '.join(f"{col}: {val}" for col, val in row.items() if str(val).strip() != '' and col != 'combined_text'),
+        for col in self.data.columns:
 
-   axis=1
+            if col == "combined_text":
+                continue
 
-  )
+            col_data = self.data[col].astype(str)
 
-  logger.info("Data preparation complete. 'combined_text' created.")
+            original_col_data = self.data[col]
 
- def _analyze_columns(self):
+            data_type = "text"
 
-  if self.data is None: return
+            if pd.api.types.is_numeric_dtype(original_col_data.infer_objects()):
 
-  logger.info("Analyzing data columns...")
+                data_type = "numeric"
 
-  self.column_info = {}
+            elif self._is_date_column(original_col_data):
 
-  for col in self.data.columns:
+                data_type = "date"
 
-   if col == 'combined_text': continue
+            empty_count = (original_col_data.isna()).sum() + (
+                original_col_data.astype(str) == ""
+            ).sum()
 
-   col_data = self.data[col].astype(str)
+            sparsity = empty_count / max(1, len(original_col_data))
 
-   original_col_data = self.data[col]
+            unique_values = original_col_data.nunique(dropna=False)
 
-   data_type = 'text'
+            value_diversity = unique_values / max(1, len(original_col_data))
 
-   if pd.api.types.is_numeric_dtype(original_col_data.infer_objects()):
+            self.column_info[col] = {
+                "data_type": data_type,
+                "sparsity": sparsity,
+                "value_diversity": value_diversity,
+                "unique_values_count": unique_values,
+            }
 
-    data_type = 'numeric'
+            if data_type == "text":
 
-   elif self._is_date_column(original_col_data):
+                avg_len = col_data.str.len().mean() if not col_data.empty else 0
 
-    data_type = 'date'
+                if value_diversity > 0.8 and unique_values > 0.8 * len(
+                    original_col_data
+                ):
 
-   empty_count = (original_col_data.isna()).sum() + (original_col_data.astype(str) == '').sum()
+                    self.column_info[col]["semantic_type"] = (
+                        "identifier" if avg_len < 50 else "description"
+                    )
 
-   sparsity = empty_count / max(1, len(original_col_data))
+                elif value_diversity < 0.2 and unique_values < 20:
 
-   unique_values = original_col_data.nunique(dropna=False)
+                    self.column_info[col]["semantic_type"] = "category"
 
-   value_diversity = unique_values / max(1, len(original_col_data))
+                    if unique_values > 0:
 
-   self.column_info[col] = {
+                        self.column_info[col]["categories"] = (
+                            original_col_data.dropna().unique().tolist()
+                            if unique_values < 20
+                            else "Too many to list"
+                        )
 
-    'data_type': data_type, 'sparsity': sparsity,
+                else:
 
-    'value_diversity': value_diversity, 'unique_values_count': unique_values
+                    self.column_info[col]["semantic_type"] = "general_text"
 
-   }
+            elif data_type == "date":
 
-   if data_type == 'text':
+                self.column_info[col]["semantic_type"] = "date"
 
-    avg_len = col_data.str.len().mean() if not col_data.empty else 0
+        logger.info(f"Column analysis complete: {self.column_info}")
 
-    if value_diversity > 0.8 and unique_values > 0.8 * len(original_col_data):
+    def _is_date_column(self, series: pd.Series) -> bool:
 
-     self.column_info[col]['semantic_type'] = 'identifier' if avg_len < 50 else 'description'
+        if series.empty:
+            return False
 
-    elif value_diversity < 0.2 and unique_values < 20:
+        try:
 
-     self.column_info[col]['semantic_type'] = 'category'
+            non_null_series = series.dropna()
 
-     if unique_values > 0:
+            if non_null_series.empty:
+                return False
 
-      self.column_info[col]['categories'] = original_col_data.dropna().unique().tolist() if unique_values < 20 else 'Too many to list'
+            sample_size = min(len(non_null_series), 20)
 
-    else:
+            sample = non_null_series.sample(sample_size)
 
-     self.column_info[col]['semantic_type'] = 'general_text'
+            converted_sample = pd.to_datetime(sample, errors="coerce")
 
-   elif data_type == 'date':
+            success_rate = converted_sample.notna().mean()
 
-    self.column_info[col]['semantic_type'] = 'date'
+            return success_rate > 0.7
 
-  logger.info(f"Column analysis complete: {self.column_info}")
+        except Exception as e:
 
- def _is_date_column(self, series: pd.Series) -> bool:
+            logger.debug(f"Date column check error: {e}")
 
-  if series.empty: return False
+            return False
 
-  try:
+    def _populate_chunk_mapping_from_data(self):
+        """Recreate the chunk mapping from data if index exists but mapping was lost"""
 
-   non_null_series = series.dropna()
+        if self.data is None or "combined_text" not in self.data.columns:
 
-   if non_null_series.empty: return False
+            logger.warning(
+                "Cannot populate chunk mapping: data or combined_text column missing"
+            )
 
-   sample_size = min(len(non_null_series), 20)
+            return
 
-   sample = non_null_series.sample(sample_size)
+        self.chunk_to_original_doc_mapping = list(range(len(self.data)))
 
-   converted_sample = pd.to_datetime(sample, errors='coerce')
+        logger.info(
+            f"Populated chunk mapping with {len(self.chunk_to_original_doc_mapping)} entries"
+        )
 
-   success_rate = converted_sample.notna().mean()
+    def _build_index(self):
+        """Build FAISS index and optionally sentence transformer embeddings"""
 
-   return success_rate > 0.7
+        if self.data is None or "combined_text" not in self.data.columns:
 
-  except Exception as e:
+            logger.error("Cannot build index: data or combined_text column missing")
 
-   logger.debug(f"Date column check error: {e}")
+            return
 
-   return False
+        logger.info("Building indices from Excel data...")
 
- def _populate_chunk_mapping_from_data(self):
+        documents = self.data["combined_text"].tolist()
 
-  """Recreate the chunk mapping from data if index exists but mapping was lost"""
+        self.chunk_to_original_doc_mapping = list(range(len(documents)))
 
-  if self.data is None or 'combined_text' not in self.data.columns:
+        # Build sentence transformer embeddings if enabled
 
-   logger.warning("Cannot populate chunk mapping: data or combined_text column missing")
+        if self.use_sentence_transformers and self.sentence_transformer:
 
-   return
+            try:
 
-  self.chunk_to_original_doc_mapping = list(range(len(self.data)))
+                logger.info("Generating sentence transformer embeddings...")
 
-  logger.info(f"Populated chunk mapping with {len(self.chunk_to_original_doc_mapping)} entries")
+                self.st_embeddings = self.sentence_transformer.encode(
+                    documents, convert_to_tensor=False
+                )
 
- def _build_index(self):
+                logger.info(
+                    f"Generated {len(self.st_embeddings)} sentence transformer embeddings"
+                )
 
-  """Build FAISS index and optionally sentence transformer embeddings"""
+            except Exception as e:
 
-  if self.data is None or 'combined_text' not in self.data.columns:
+                logger.error(f"Failed to generate sentence transformer embeddings: {e}")
 
-   logger.error("Cannot build index: data or combined_text column missing")
+                self.st_embeddings = None
 
-   return
+        # Build Azure OpenAI FAISS index if available
 
-  logger.info("Building indices from Excel data...")
+        if self.embedding_model:
 
-  documents = self.data['combined_text'].tolist()
+            try:
 
-  self.chunk_to_original_doc_mapping = list(range(len(documents)))
+                logger.info("Generating embeddings...")
 
-  # Build sentence transformer embeddings if enabled
+                embeddings = self.embedding_model.embed_documents(documents)
 
-  if self.use_sentence_transformers and self.sentence_transformer:
+                self.dimension = len(embeddings[0])
 
-   try:
+                logger.info(
+                    f"Creating FAISS index with embedding dimension: {self.dimension}"
+                )
 
-    logger.info("Generating sentence transformer embeddings...")
+                self.index = faiss.IndexFlatL2(self.dimension)
 
-    self.st_embeddings = self.sentence_transformer.encode(documents, convert_to_tensor=False)
+                faiss.normalize_L2(np.array(embeddings, dtype=np.float32))
 
-    logger.info(f"Generated {len(self.st_embeddings)} sentence transformer embeddings")
+                self.index.add(np.array(embeddings, dtype=np.float32))
 
-   except Exception as e:
+                logger.info(
+                    f"FAISS index built successfully with {len(documents)} vectors"
+                )
 
-    logger.error(f"Failed to generate sentence transformer embeddings: {e}")
+                try:
 
-    self.st_embeddings = None
+                    faiss.write_index(self.index, self.index_file)
 
-  # Build Azure OpenAI FAISS index if available
+                    logger.info(f"FAISS index persisted to {self.index_file}")
 
-  if self.embedding_model:
+                except Exception as e:
 
-   try:
+                    logger.error(f"Failed to persist FAISS index: {e}")
 
-    logger.info("Generating Azure OpenAI embeddings...")
+            except Exception as e:
 
-    embeddings = self.embedding_model.embed_documents(documents)
+                logger.error(f"Failed to build FAISS index: {e}")
 
-    self.dimension = len(embeddings[0])
+                self.index = None
 
-    logger.info(f"Creating FAISS index with embedding dimension: {self.dimension}")
+    def _load_index(self, index_path: str):
+        """Load a FAISS index from disk"""
 
-    self.index = faiss.IndexFlatL2(self.dimension)
+        if not os.path.exists(index_path):
 
-    faiss.normalize_L2(np.array(embeddings, dtype=np.float32))
+            raise FileNotFoundError(f"Index file not found: {index_path}")
 
-    self.index.add(np.array(embeddings, dtype=np.float32))
+        self.index = faiss.read_index(index_path)
 
-    logger.info(f"FAISS index built successfully with {len(documents)} vectors")
+        if self.index.ntotal == 0:
 
-    try:
+            raise ValueError(f"Loaded index is empty: {index_path}")
 
-     faiss.write_index(self.index, self.index_file)
+        self.dimension = self.index.d
 
-     logger.info(f"FAISS index persisted to {self.index_file}")
+        logger.info(
+            f"Successfully loaded FAISS index from {index_path}. N_vectors: {self.index.ntotal}, Dimension: {self.dimension}"
+        )
 
-    except Exception as e:
+    def _sentence_transformer_retrieve(
+        self, query: str, k: int = 10
+    ) -> List[Dict[str, Any]]:
+        """Retrieve using sentence transformers"""
 
-     logger.error(f"Failed to persist FAISS index: {e}")
+        if (
+            not self.use_sentence_transformers
+            or self.sentence_transformer is None
+            or self.st_embeddings is None
+        ):
 
-   except Exception as e:
+            return []
 
-    logger.error(f"Failed to build FAISS index: {e}")
+        logger.info(f"Performing sentence transformer retrieval for: {query[:100]}...")
 
-    self.index = None
+        try:
 
- def _load_index(self, index_path: str):
+            # Encode query
 
-  """Load a FAISS index from disk"""
+            query_embedding = self.sentence_transformer.encode([query])
 
-  if not os.path.exists(index_path):
+            # Calculate cosine similarities
 
-   raise FileNotFoundError(f"Index file not found: {index_path}")
+            similarities = cosine_similarity(query_embedding, self.st_embeddings)[0]
 
-  self.index = faiss.read_index(index_path)
+            # Get top k results
 
-  if self.index.ntotal == 0:
+            top_indices = np.argsort(similarities)[::-1][:k]
 
-   raise ValueError(f"Loaded index is empty: {index_path}")
+            retrieved_docs = []
 
-  self.dimension = self.index.d
+            for i, idx in enumerate(top_indices):
 
-  logger.info(f"Successfully loaded FAISS index from {index_path}. N_vectors: {self.index.ntotal}, Dimension: {self.dimension}")
+                if idx >= len(self.chunk_to_original_doc_mapping):
 
- def _sentence_transformer_retrieve(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+                    continue
 
-  """Retrieve using sentence transformers"""
+                doc_idx = self.chunk_to_original_doc_mapping[idx]
 
-  if not self.use_sentence_transformers or self.sentence_transformer is None or self.st_embeddings is None:
+                if doc_idx >= len(self.metadata):
 
-   return []
+                    continue
 
-  logger.info(f"Performing sentence transformer retrieval for: {query[:100]}...")
+                similarity_score = float(similarities[idx])
 
-  try:
+                doc_content = self.metadata[doc_idx].copy()
 
-   # Encode query
+                if "combined_text" in doc_content:
 
-   query_embedding = self.sentence_transformer.encode([query])
+                    del doc_content["combined_text"]
 
-   # Calculate cosine similarities
+                retrieved_docs.append(
+                    {
+                        "id": doc_idx,
+                        "content": doc_content,
+                        "similarity": similarity_score,
+                        "retrieval_method": "sentence_transformer",
+                    }
+                )
 
-   similarities = cosine_similarity(query_embedding, self.st_embeddings)[0]
+            logger.info(
+                f"Sentence transformer retrieved {len(retrieved_docs)} documents."
+            )
 
-   # Get top k results
+            return retrieved_docs
 
-   top_indices = np.argsort(similarities)[::-1][:k]
+        except Exception as e:
 
-   retrieved_docs = []
+            logger.error(
+                f"Error during sentence transformer retrieval: {e}", exc_info=True
+            )
 
-   for i, idx in enumerate(top_indices):
+            return []
 
-    if idx >= len(self.chunk_to_original_doc_mapping):
+    def _embeddings_retrieve(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+        """Retrieve using embeddings model and FAISS"""
 
-     continue
+        if self.index is None or self.embedding_model is None:
 
-    doc_idx = self.chunk_to_original_doc_mapping[idx]
+            return []
 
-    if doc_idx >= len(self.metadata):
+        logger.info(f"Performing Azure OpenAI retrieval for: {query[:100]}...")
 
-     continue
+        try:
 
-    similarity_score = float(similarities[idx])
+            query_embedding = self.embedding_model.embed_query(query)
 
-    doc_content = self.metadata[doc_idx].copy()
+            query_embedding_np = np.array([query_embedding], dtype=np.float32)
 
-    if 'combined_text' in doc_content:
+            faiss.normalize_L2(query_embedding_np)
 
-     del doc_content['combined_text']
+            distances, indices = self.index.search(
+                query_embedding_np, min(k, self.index.ntotal)
+            )
 
-    retrieved_docs.append({
+            retrieved_docs = []
 
-     "id": doc_idx,
+            for i, (idx, distance) in enumerate(zip(indices[0], distances[0])):
 
-     "content": doc_content,
+                if idx >= len(self.chunk_to_original_doc_mapping):
 
-     "similarity": similarity_score,
+                    continue
 
-     "retrieval_method": "sentence_transformer"
+                doc_idx = self.chunk_to_original_doc_mapping[idx]
 
-    })
+                if doc_idx >= len(self.metadata):
 
-   logger.info(f"Sentence transformer retrieved {len(retrieved_docs)} documents.")
+                    continue
 
-   return retrieved_docs
+                similarity = 1.0 - min(1.0, float(distance) / 2.0)
 
-  except Exception as e:
+                doc_content = self.metadata[doc_idx].copy()
 
-   logger.error(f"Error during sentence transformer retrieval: {e}", exc_info=True)
+                if "combined_text" in doc_content:
 
-   return []
+                    del doc_content["combined_text"]
 
- def _azure_openai_retrieve(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
+                retrieved_docs.append(
+                    {
+                        "id": doc_idx,
+                        "content": doc_content,
+                        "similarity": similarity,
+                        "retrieval_method": "azure_openai",
+                    }
+                )
 
-  """Retrieve using Azure OpenAI embeddings and FAISS"""
+            logger.info(f"Azure OpenAI retrieved {len(retrieved_docs)} documents.")
 
-  if self.index is None or self.embedding_model is None:
+            return retrieved_docs
 
-   return []
+        except Exception as e:
 
-  logger.info(f"Performing Azure OpenAI retrieval for: {query[:100]}...")
+            logger.error(f"Error during Azure OpenAI retrieval: {e}", exc_info=True)
 
-  try:
+            return []
 
-   query_embedding = self.embedding_model.embed_query(query)
+    def _rerank_documents(
+        self, query: str, documents: List[Dict[str, Any]], top_k: int = None
+    ) -> List[Dict[str, Any]]:
+        """Re-rank documents using cross-encoder"""
 
-   query_embedding_np = np.array([query_embedding], dtype=np.float32)
+        if not self.use_reranker or self.reranker is None or not documents:
 
-   faiss.normalize_L2(query_embedding_np)
+            return documents
 
-   distances, indices = self.index.search(query_embedding_np, min(k, self.index.ntotal))
+        logger.info(f"Re-ranking {len(documents)} documents...")
 
-   retrieved_docs = []
+        try:
 
-   for i, (idx, distance) in enumerate(zip(indices[0], distances[0])):
+            # Prepare query-document pairs for reranking
 
-    if idx >= len(self.chunk_to_original_doc_mapping):
+            query_doc_pairs = []
 
-     continue
+            for doc in documents:
 
-    doc_idx = self.chunk_to_original_doc_mapping[idx]
+                # Use combined_text if available, otherwise concatenate content
 
-    if doc_idx >= len(self.metadata):
+                if "combined_text" in self.metadata[doc["id"]]:
 
-     continue
+                    doc_text = self.metadata[doc["id"]]["combined_text"]
 
-    similarity = 1.0 - min(1.0, float(distance) / 2.0)
+                else:
 
-    doc_content = self.metadata[doc_idx].copy()
+                    doc_text = " ".join(
+                        f"{k}: {v}" for k, v in doc["content"].items() if str(v).strip()
+                    )
 
-    if 'combined_text' in doc_content:
+                query_doc_pairs.append([query, doc_text])
 
-     del doc_content['combined_text']
+            # Get reranking scores
 
-    retrieved_docs.append({
+            rerank_scores = self.reranker.predict(query_doc_pairs)
 
-     "id": doc_idx,
+            # Add rerank scores to documents and sort
 
-     "content": doc_content,
+            for i, doc in enumerate(documents):
 
-     "similarity": similarity,
+                doc["rerank_score"] = float(rerank_scores[i])
 
-     "retrieval_method": "azure_openai"
+            # Sort by rerank score (higher is better for cross-encoder)
 
-    })
+            reranked_docs = sorted(
+                documents, key=lambda x: x["rerank_score"], reverse=True
+            )
 
-   logger.info(f"Azure OpenAI retrieved {len(retrieved_docs)} documents.")
+            # Limit to top_k if specified
 
-   return retrieved_docs
+            if top_k:
 
-  except Exception as e:
+                reranked_docs = reranked_docs[:top_k]
 
-   logger.error(f"Error during Azure OpenAI retrieval: {e}", exc_info=True)
+            logger.info(
+                f"Re-ranking complete. Top document rerank score: {reranked_docs[0]['rerank_score']:.4f}"
+            )
 
-   return []
+            return reranked_docs
 
- def _rerank_documents(self, query: str, documents: List[Dict[str, Any]], top_k: int = None) -> List[Dict[str, Any]]:
+        except Exception as e:
 
-  """Re-rank documents using cross-encoder"""
+            logger.error(f"Error during re-ranking: {e}", exc_info=True)
 
-  if not self.use_reranker or self.reranker is None or not documents:
+            return documents
 
-   return documents
+    def retrieve(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        """Enhanced retrieval combining multiple methods"""
 
-  logger.info(f"Re-ranking {len(documents)} documents...")
+        logger.info(f"Starting enhanced retrieval for query: {query[:100]}...")
 
-  try:
+        all_retrieved_docs = []
 
-   # Prepare query-document pairs for reranking
+        # Method 1: Sentence Transformer retrieval
 
-   query_doc_pairs = []
+        if self.use_sentence_transformers:
 
-   for doc in documents:
+            st_docs = self._sentence_transformer_retrieve(
+                query, k * 2
+            )  # Get more for diversity
 
-    # Use combined_text if available, otherwise concatenate content
+            all_retrieved_docs.extend(st_docs)
 
-    if 'combined_text' in self.metadata[doc['id']]:
+        # Method 2: Embeddings-based retrieval
 
-     doc_text = self.metadata[doc['id']]['combined_text']
+        embedding_docs = self._embeddings_retrieve(query, k * 2)
 
-    else:
+        all_retrieved_docs.extend(embedding_docs)
 
-     doc_text = ' '.join(f"{k}: {v}" for k, v in doc['content'].items() if str(v).strip())
+        # Remove duplicates based on document ID
 
-    query_doc_pairs.append([query, doc_text])
+        seen_ids = set()
 
-   # Get reranking scores
+        unique_docs = []
 
-   rerank_scores = self.reranker.predict(query_doc_pairs)
+        for doc in all_retrieved_docs:
 
-   # Add rerank scores to documents and sort
+            if doc["id"] not in seen_ids:
 
-   for i, doc in enumerate(documents):
+                unique_docs.append(doc)
 
-    doc['rerank_score'] = float(rerank_scores[i])
+                seen_ids.add(doc["id"])
 
-   # Sort by rerank score (higher is better for cross-encoder)
+        logger.info(f"Combined retrieval found {len(unique_docs)} unique documents")
 
-   reranked_docs = sorted(documents, key=lambda x: x['rerank_score'], reverse=True)
+        # Re-rank if enabled
 
-   # Limit to top_k if specified
+        if self.use_reranker:
 
-   if top_k:
+            final_docs = self._rerank_documents(query, unique_docs, k)
 
-    reranked_docs = reranked_docs[:top_k]
+        else:
 
-   logger.info(f"Re-ranking complete. Top document rerank score: {reranked_docs[0]['rerank_score']:.4f}")
+            # Sort by similarity and take top k
 
-   return reranked_docs
+            final_docs = sorted(
+                unique_docs, key=lambda x: x.get("similarity", 0), reverse=True
+            )[:k]
 
-  except Exception as e:
+        logger.info(f"Final retrieval returned {len(final_docs)} documents")
 
-   logger.error(f"Error during re-ranking: {e}", exc_info=True)
+        return final_docs
 
-   return documents
+    def format_retrieved_document_for_llm(self, doc: Dict) -> str:
+        """Format a retrieved document for inclusion in the LLM context"""
 
- def retrieve(self, query: str, k: int = 5) -> List[Dict[str, Any]]:
+        formatted_content = [f"DOCUMENT ID: {doc['id']}"]
 
-  """Enhanced retrieval combining multiple methods"""
+        # Add retrieval method and scores
 
-  logger.info(f"Starting enhanced retrieval for query: {query[:100]}...")
+        if "retrieval_method" in doc:
 
-  all_retrieved_docs = []
+            formatted_content.append(f"Retrieval Method: {doc['retrieval_method']}")
 
-  # Method 1: Sentence Transformer retrieval
+        if "similarity" in doc:
 
-  if self.use_sentence_transformers:
+            formatted_content.append(f"Similarity Score: {doc['similarity']:.4f}")
 
-   st_docs = self._sentence_transformer_retrieve(query, k * 2) # Get more for diversity
+        if "rerank_score" in doc:
 
-   all_retrieved_docs.extend(st_docs)
+            formatted_content.append(f"Rerank Score: {doc['rerank_score']:.4f}")
 
-  # Method 2: Azure OpenAI retrieval
+        if "content" not in doc or not doc["content"]:
 
-  azure_docs = self._azure_openai_retrieve(query, k * 2)
+            return (
+                "\n".join(formatted_content)
+                + "\nNo content available for this document."
+            )
 
-  all_retrieved_docs.extend(azure_docs)
+        for key, value in doc["content"].items():
 
-  # Remove duplicates based on document ID
+            value_str = str(value) if value is not None else ""
 
-  seen_ids = set()
+            if value_str.strip():
 
-  unique_docs = []
+                formatted_key = key.replace("_", " ").title()
 
-  for doc in all_retrieved_docs:
+                formatted_content.append(f"{formatted_key}: {value_str}")
 
-   if doc['id'] not in seen_ids:
+        return "\n".join(formatted_content)
 
-    unique_docs.append(doc)
+    def analyze_patterns(self, retrieved_docs: List[Dict]) -> Dict[str, Any]:
 
-    seen_ids.add(doc['id'])
+        if not retrieved_docs:
+            return {"count": 0, "patterns": {}, "date_range": None}
 
-  logger.info(f"Combined retrieval found {len(unique_docs)} unique documents")
+        analysis = {"count": len(retrieved_docs), "patterns": {}, "date_range": None}
 
-  # Re-rank if enabled
+        for col_name, info in self.column_info.items():
 
-  if self.use_reranker:
+            if info.get("semantic_type") == "category" or (
+                info.get("data_type") == "text"
+                and info.get("value_diversity", 1.0) < 0.5
+            ):
 
-   final_docs = self._rerank_documents(query, unique_docs, k)
+                value_counts = {}
 
-  else:
+                for doc in retrieved_docs:
 
-   # Sort by similarity and take top k
+                    value = doc["content"].get(col_name)
 
-   final_docs = sorted(unique_docs, key=lambda x: x.get('similarity', 0), reverse=True)[:k]
+                    if value is not None and str(value).strip():
 
-  logger.info(f"Final retrieval returned {len(final_docs)} documents")
+                        value_str = str(value)
 
-  return final_docs
+                        value_counts[value_str] = value_counts.get(value_str, 0) + 1
 
- def format_retrieved_document_for_llm(self, doc: Dict) -> str:
+                if value_counts:
+                    analysis["patterns"][col_name] = value_counts
 
-  """Format a retrieved document for inclusion in the LLM context"""
+            if info.get("data_type") == "date":
 
-  formatted_content = [f"DOCUMENT ID: {doc['id']}"]
+                dates = []
 
-  # Add retrieval method and scores
+                for doc in retrieved_docs:
 
-  if 'retrieval_method' in doc:
+                    date_val = doc["content"].get(col_name)
 
-   formatted_content.append(f"Retrieval Method: {doc['retrieval_method']}")
+                    if date_val:
 
-  if 'similarity' in doc:
+                        try:
+                            dt = pd.to_datetime(date_val, errors="coerce")
 
-   formatted_content.append(f"Similarity Score: {doc['similarity']:.4f}")
+                        except:
+                            dt = None
 
-  if 'rerank_score' in doc:
+                        if pd.notna(dt):
+                            dates.append(dt)
 
-   formatted_content.append(f"Rerank Score: {doc['rerank_score']:.4f}")
+                if dates:
 
-  if 'content' not in doc or not doc['content']:
+                    min_date, max_date = min(dates), max(dates)
 
-   return "\n".join(formatted_content) + "\nNo content available for this document."
+                    if analysis["date_range"] is None:
 
-  for key, value in doc["content"].items():
+                        analysis["date_range"] = {
+                            "column": col_name,
+                            "min_date": min_date.strftime("%Y-%m-%d"),
+                            "max_date": max_date.strftime("%Y-%m-%d"),
+                            "span_days": (max_date - min_date).days,
+                        }
 
-   value_str = str(value) if value is not None else ""
+        logger.info(f"Pattern analysis complete: {analysis}")
 
-   if value_str.strip():
+        return analysis
 
-    formatted_key = key.replace('_', ' ').title()
+    def generate_response(self, query: str, k: int = 3) -> Dict[str, Any]:
 
-    formatted_content.append(f"{formatted_key}: {value_str}")
+        if not self.chain:
 
-  return "\n".join(formatted_content)
+            logger.error("Cannot generate response: LLM chain not initialized.")
 
- def analyze_patterns(self, retrieved_docs: List[Dict]) -> Dict[str, Any]:
+            return {
+                "response": "System error: Unable to process request.",
+                "retrieved_docs": [],
+                "pattern_analysis": {"count": 0},
+            }
 
-  if not retrieved_docs: return {"count": 0, "patterns": {}, "date_range": None}
+        logger.info(f"Generating enhanced response for query: {query[:100]}..., k={k}")
 
-  analysis = {"count": len(retrieved_docs), "patterns": {}, "date_range": None}
+        dataset_overview_summary = self._generate_dataset_overview_summary()
 
-  for col_name, info in self.column_info.items():
+        retrieved_docs = self.retrieve(query, k)
 
-   if info.get('semantic_type') == 'category' or (info.get('data_type') == 'text' and info.get('value_diversity', 1.0) < 0.5):
+        if retrieved_docs:
 
-    value_counts = {}
+            retrieved_documents_llm_context = "\n\n===\n\n".join(
+                [self.format_retrieved_document_for_llm(doc) for doc in retrieved_docs]
+            )
 
-    for doc in retrieved_docs:
+        else:
 
-     value = doc["content"].get(col_name)
+            retrieved_documents_llm_context = (
+                "No specific documents were found to be highly relevant to this query."
+            )
 
-     if value is not None and str(value).strip():
+            logger.warning("No relevant documents found for the query to pass to LLM.")
 
-      value_str = str(value)
+        pattern_analysis = self.analyze_patterns(retrieved_docs)
 
-      value_counts[value_str] = value_counts.get(value_str, 0) + 1
+        pattern_analysis_llm_summary_parts = [
+            "Summary of Patterns Found in Retrieved Documents:"
+        ]
 
-    if value_counts: analysis["patterns"][col_name] = value_counts
+        if pattern_analysis["count"] > 0:
 
-   if info.get('data_type') == 'date':
+            pattern_analysis_llm_summary_parts.append(
+                f"- Number of similar records found: {pattern_analysis['count']}"
+            )
 
-    dates = []
+            if pattern_analysis.get("date_range"):
 
-    for doc in retrieved_docs:
+                dr = pattern_analysis["date_range"]
 
-     date_val = doc["content"].get(col_name)
+                pattern_analysis_llm_summary_parts.append(
+                    f"- These records span from {dr['min_date']} to {dr['max_date']} ({dr['span_days']} days) in the '{dr['column']}' field"
+                )
 
-     if date_val:
+            if pattern_analysis.get("patterns"):
 
-      try: dt = pd.to_datetime(date_val, errors='coerce')
+                pattern_analysis_llm_summary_parts.append(
+                    "- Common patterns identified:"
+                )
 
-      except: dt = None
+                for field, value_counts in pattern_analysis["patterns"].items():
 
-      if pd.notna(dt): dates.append(dt)
+                    top_values = sorted(
+                        value_counts.items(), key=lambda x: x[1], reverse=True
+                    )[:3]
 
-    if dates:
+                    field_display = field.replace("_", " ").title()
 
-     min_date, max_date = min(dates), max(dates)
+                    values_display = ", ".join(
+                        [f"{val} ({count}x)" for val, count in top_values]
+                    )
 
-     if analysis["date_range"] is None:
+                    pattern_analysis_llm_summary_parts.append(
+                        f" * {field_display}: {values_display}"
+                    )
 
-      analysis["date_range"] = {
+        else:
 
-       "column": col_name, "min_date": min_date.strftime("%Y-%m-%d"),
+            pattern_analysis_llm_summary_parts.append(
+                "- No specific patterns identified in the retrieved documents."
+            )
 
-       "max_date": max_date.strftime("%Y-%m-%d"), "span_days": (max_date - min_date).days
+        pattern_analysis_llm_summary = "\n".join(pattern_analysis_llm_summary_parts)
 
-      }
+        try:
 
-  logger.info(f"Pattern analysis complete: {analysis}")
+            logger.info("Calling LLM chain to generate response...")
 
-  return analysis
+            response = self.chain.run(
+                dataset_overview=dataset_overview_summary,
+                retrieved_documents_context=retrieved_documents_llm_context,
+                pattern_analysis_summary=pattern_analysis_llm_summary,
+                query=query,
+            )
 
- def generate_response(self, query: str, k: int = 3) -> Dict[str, Any]:
+            logger.info(
+                f"LLM response generated successfully. Length: {len(response)} characters"
+            )
 
-  if not self.chain:
+        except Exception as e:
 
-   logger.error("Cannot generate response: LLM chain not initialized.")
+            logger.error(f"Error generating LLM response: {e}", exc_info=True)
 
-   return {"response": "System error: Unable to process request.", "retrieved_docs": [], "pattern_analysis": {"count": 0}}
+            response = f"I apologize, but I encountered an error while processing your query: {str(e)}"
 
-  logger.info(f"Generating enhanced response for query: {query[:100]}..., k={k}")
+        # Prepare response with serializable data
 
-  dataset_overview_summary = self._generate_dataset_overview_summary()
+        serializable_retrieved_docs = make_serializable(retrieved_docs)
 
-  retrieved_docs = self.retrieve(query, k)
+        serializable_pattern_analysis = make_serializable(pattern_analysis)
 
-  if retrieved_docs:
+        return {
+            "response": response,
+            "retrieved_docs": serializable_retrieved_docs,
+            "pattern_analysis": serializable_pattern_analysis,
+            "dataset_overview": dataset_overview_summary,
+            "query": query,
+        }
 
-   retrieved_documents_llm_context = "\n\n===\n\n".join([self.format_retrieved_document_for_llm(doc) for doc in retrieved_docs])
+    def get_system_status(self) -> Dict[str, Any]:
+        """Get comprehensive system status information"""
 
-  else:
+        status = {
+            "embedding_model_ready": self.embedding_model is not None,
+            "llm_ready": self.llm is not None,
+            "data_loaded": self.data is not None and not self.data.empty,
+            "faiss_index_ready": self.index is not None,
+            "sentence_transformer_ready": self.sentence_transformer is not None,
+            "reranker_ready": self.reranker is not None,
+            "total_documents": len(self.metadata) if self.metadata else 0,
+            "index_dimension": self.dimension,
+            "features_enabled": {
+                "sentence_transformers": self.use_sentence_transformers,
+                "reranker": self.use_reranker,
+                "azure_openai": self.embedding_model is not None
+                and self.llm is not None,
+            },
+        }
 
-   retrieved_documents_llm_context = "No specific documents were found to be highly relevant to this query."
+        if self.data is not None:
 
-   logger.warning("No relevant documents found for the query to pass to LLM.")
+            status["data_shape"] = list(self.data.shape)
 
-  pattern_analysis = self.analyze_patterns(retrieved_docs)
+            status["columns"] = list(self.data.columns)
 
-  pattern_analysis_llm_summary_parts = ["Summary of Patterns Found in Retrieved Documents:"]
+            status["column_info"] = self.column_info
 
-  if pattern_analysis["count"] > 0:
+        if self.index:
 
-   pattern_analysis_llm_summary_parts.append(f"- Number of similar records found: {pattern_analysis['count']}")
+            status["faiss_index_size"] = self.index.ntotal
 
-   if pattern_analysis.get("date_range"):
+        if self.st_embeddings is not None:
 
-    dr = pattern_analysis["date_range"]
+            status["sentence_transformer_embeddings_count"] = len(self.st_embeddings)
 
-    pattern_analysis_llm_summary_parts.append(f"- These records span from {dr['min_date']} to {dr['max_date']} ({dr['span_days']} days) in the '{dr['column']}' field")
+        return make_serializable(status)
 
-   if pattern_analysis.get("patterns"):
+    def _perform_data_analysis(self, df: pd.DataFrame, query: str) -> Dict[str, Any]:
+        """Perform statistical analysis on the dataframe based on the query"""
+        try:
+            analysis_results = {
+                "metrics": {},
+                "summary": {},
+                "sample_data": None
+            }
 
-    pattern_analysis_llm_summary_parts.append("- Common patterns identified:")
+            # Parse the query to identify key terms
+            query_lower = query.lower()
+            query_year = None
+            
+            # Extract year if present in query
+            import re
+            year_match = re.search(r'\b20\d{2}\b', query)
+            if year_match:
+                query_year = int(year_match.group())
+            
+            # Check if query is about specific component
+            if 'mobile app' in query_lower:
+                component_filter = df['Component'] == 'Mobile App'
+                filtered_df = df[component_filter]
+            else:
+                filtered_df = df
 
-    for field, value_counts in pattern_analysis["patterns"].items():
+            # Basic dataset metrics
+            analysis_results["metrics"] = {
+                "total_rows": len(filtered_df),
+                "total_columns": len(filtered_df.columns),
+                "complete_records": filtered_df.dropna().shape[0],
+                "matching_year_records": 0,  # Will be updated if year filter applies
+                "unique_values": {
+                    col: int(filtered_df[col].nunique()) 
+                    for col in filtered_df.columns
+                }
+            }
 
-     top_values = sorted(value_counts.items(), key=lambda x: x[1], reverse=True)[:3]
+            # Date analysis and time-based filtering
+            date_cols = ['Defect Log Date', 'Defect Resolution Date']
+            date_analysis = {}
+            year_counts = {}
+            
+            for col in date_cols:
+                if col in filtered_df.columns:
+                    dates = pd.to_datetime(filtered_df[col], errors='coerce')
+                    if not dates.empty:
+                        min_date = dates.min()
+                        max_date = dates.max()
+                        
+                        # Basic date info
+                        date_info = {
+                            "min_date": min_date.strftime("%Y-%m-%d") if pd.notna(min_date) else None,
+                            "max_date": max_date.strftime("%Y-%m-%d") if pd.notna(max_date) else None,
+                            "range_days": int((max_date - min_date).days) if pd.notna(max_date) and pd.notna(min_date) else 0
+                        }
+                        
+                        # Year distribution
+                        year_dist = dates.dt.year.value_counts()
+                        date_info["year_distribution"] = {str(k): int(v) for k, v in year_dist.items()}
+                        
+                        # Update matching year records if query includes year
+                        if query_year and str(query_year) in date_info["year_distribution"]:
+                            analysis_results["metrics"]["matching_year_records"] = date_info["year_distribution"][str(query_year)]
+                        
+                        date_analysis[col] = date_info
+                        year_counts[col] = {str(k): int(v) for k, v in year_dist.items()}
+                        date_analysis[col] = {
+                            "min_date": dates.min().strftime("%Y-%m-%d"),
+                            "max_date": dates.max().strftime("%Y-%m-%d"),
+                            "range_days": int((dates.max() - dates.min()).days),
+                            "year_distribution": dates.dt.year.value_counts().to_dict()
+                        }
+                        # Count defects by year
+                        year_counts[col] = dates.dt.year.value_counts().to_dict()
 
-     field_display = field.replace('_', ' ').title()
+            analysis_results["summary"]["dates"] = date_analysis
+            analysis_results["summary"]["year_counts"] = year_counts
 
-     values_display = ", ".join([f"{val} ({count}x)" for val, count in top_values])
+            # Categorical analysis with counts
+            important_cats = ['Component', 'Prict', 'Sev', 'Containment Phase', 'Root Cause']
+            cat_analysis = {}
+            
+            for col in important_cats:
+                if col in filtered_df.columns:
+                    counts = filtered_df[col].value_counts()
+                    cat_analysis[col] = {
+                        "counts": counts.to_dict(),
+                        "total": len(counts),
+                        "top_5": counts.head().to_dict()
+                    }
 
-     pattern_analysis_llm_summary_parts.append(f" * {field_display}: {values_display}")
+            analysis_results["summary"]["categorical"] = cat_analysis
 
-  else:
+            # Sample data (relevant to query)
+            if 'mobile app' in query_lower:
+                analysis_results["sample_data"] = filtered_df.head(5).to_dict('records')
+            else:
+                analysis_results["sample_data"] = df.head(5).to_dict('records')
 
-   pattern_analysis_llm_summary_parts.append("- No specific patterns identified in the retrieved documents.")
+            return analysis_results
 
-  pattern_analysis_llm_summary = "\n".join(pattern_analysis_llm_summary_parts)
+        except Exception as e:
+            logger.error(f"Error in data analysis: {e}")
+            return {"error": str(e)}
 
-  try:
+    def _generate_analytical_context(self, df: pd.DataFrame, analysis_results: Dict, query: str) -> str:
+        """Generate structured context from analysis results for LLM"""
+        context_parts = []
 
-   logger.info("Calling LLM chain to generate response...")
+        metrics = analysis_results.get('metrics', {})
+        summary = analysis_results.get('summary', {})
 
-   response = self.chain.run(
+        # Dataset overview
+        context_parts.append(f"Dataset Overview:")
+        context_parts.append(f"- Total records analyzed: {metrics.get('total_rows', 0)}")
+        context_parts.append(f"- Complete records: {metrics.get('complete_records', 0)}")
+        if metrics.get('matching_year_records', 0) > 0:
+            context_parts.append(f"- Matching year records: {metrics['matching_year_records']}")
 
-    dataset_overview=dataset_overview_summary,
+        # Date ranges and year distribution
+        if 'dates' in summary:
+            context_parts.append("\nTemporal Analysis:")
+            for col, date_info in summary['dates'].items():
+                context_parts.append(f"\n{col}:")
+                context_parts.append(f"- Date range: {date_info['min_date']} to {date_info['max_date']}")
+                context_parts.append("- Year distribution:")
+                for year, count in date_info.get('year_distribution', {}).items():
+                    context_parts.append(f"  * {year}: {count} records")
 
-    retrieved_documents_context=retrieved_documents_llm_context,
+        # Category distributions
+        if 'categorical' in summary:
+            context_parts.append("\nCategory Analysis:")
+            for col, cat_info in summary['categorical'].items():
+                if col == 'Component' or 'mobile app' in query.lower():
+                    context_parts.append(f"\n{col}:")
+                    for category, count in cat_info['counts'].items():
+                        if 'mobile app' in query.lower() and 'mobile app' in category.lower():
+                            context_parts.append(f"- {category}: {count} records")
+                        elif not 'mobile app' in query.lower():
+                            context_parts.append(f"- {category}: {count} records")
 
-    pattern_analysis_summary=pattern_analysis_llm_summary,
+        return "\n".join(context_parts)
 
-    query=query
+    def _generate_analytical_response(self, query: str, context: str) -> str:
+        """Generate LLM response for analytical mode"""
+        try:
+            analytical_prompt = f"""
+            You are a data analyst assistant. Based on the following data analysis and user query,
+            provide a clear, concise response that directly addresses the query using the available data insights.
 
-   )
+            Data Analysis Context:
+            {context}
 
-   logger.info(f"LLM response generated successfully. Length: {len(response)} characters")
+            User Query: {query}
 
-  except Exception as e:
+            Guidelines for your response:
+            1. For time-based queries:
+               - First check if we have data for the specific time period
+               - If we have partial data for the period, specify exactly what we have
+               - Provide the exact count for the available period
+            2. For component-specific queries:
+               - Give the exact count of incidents/defects
+               - Specify the time period the count represents
+            3. Always include specific numbers and dates when available
+            4. If data is completely unavailable for the requested period, say so directly
+            
+            Format your response like this:
+            "Found [X] matching records in [specific time period]. [Optional: Brief breakdown if relevant]"
+            OR
+            "No data available for [requested period]. Available data covers [actual period] with [X] matching records."
 
-   logger.error(f"Error generating LLM response: {e}", exc_info=True)
+            Response:
+            """
 
-   response = f"I apologize, but I encountered an error while processing your query: {str(e)}"
+            response = self.llm.predict(analytical_prompt)
+            return response
 
-  # Prepare response with serializable data
+        except Exception as e:
+            logger.error(f"Error generating analytical response: {e}")
+            return f"Error generating analysis response: {str(e)}"
 
-  serializable_retrieved_docs = make_serializable(retrieved_docs)
+    def analyze_data_directly(
+        self, query: str, excel_file_path: str = None, sheet_name: str = None
+    ) -> Dict[str, Any]:
+        """
+        Perform direct data analysis using Pandas instead of document retrieval.
+        This bypasses the RAG pipeline and provides structured data insights.
+        Uses the system's already loaded data by default.
+        """
 
-  serializable_pattern_analysis = make_serializable(pattern_analysis)
+        logger.info(f"Starting analytical thinking mode for query: {query[:100]}...")
 
-  return {
+        try:
+            # Use the system's already loaded data instead of loading new data
+            if self.data is None or self.data.empty:
+                raise ValueError(
+                    "No data available in the system. Please initialize the system first with data."
+                )
 
-   "response": response,
+            # Use the system's current data
+            df = self.data.copy()
 
-   "retrieved_docs": serializable_retrieved_docs,
+            # Remove the combined_text column for analysis as it's just a concatenation
+            if "combined_text" in df.columns:
+                df = df.drop("combined_text", axis=1)
 
-   "pattern_analysis": serializable_pattern_analysis,
+            logger.info(
+                f"Using system's loaded data: {len(df)} rows, {len(df.columns)} columns"
+            )
 
-   "dataset_overview": dataset_overview_summary,
+            # Analyze the query to determine what kind of analysis to perform
+            analysis_results = self._perform_data_analysis(df, query)
 
-   "query": query
+            # Generate structured context for LLM
+            structured_context = self._generate_analytical_context(
+                df, analysis_results, query
+            )
 
-  }
+            # Generate LLM response using analytical context
+            if self.llm:
+                analytical_response = self._generate_analytical_response(
+                    query, structured_context
+                )
+            else:
+                analytical_response = "LLM not available for response generation."
 
- def get_system_status(self) -> Dict[str, Any]:
+            return {
+                "response": analytical_response,
+                "analytical_results": analysis_results,
+                "data_summary": {
+                    "total_rows": len(df),
+                    "total_columns": len(df.columns),
+                    "columns": list(df.columns),
+                    "source": "System loaded data",
+                    "file_path": self.excel_file_path,
+                },
+                "query": query,
+                "mode": "analytical_thinking",
+            }
 
-  """Get comprehensive system status information"""
+        except Exception as e:
 
-  status = {
+            logger.error(f"Error in analytical thinking mode: {e}", exc_info=True)
 
-   "embedding_model_ready": self.embedding_model is not None,
-
-   "llm_ready": self.llm is not None,
-
-   "data_loaded": self.data is not None and not self.data.empty,
-
-   "faiss_index_ready": self.index is not None,
-
-   "sentence_transformer_ready": self.sentence_transformer is not None,
-
-   "reranker_ready": self.reranker is not None,
-
-   "total_documents": len(self.metadata) if self.metadata else 0,
-
-   "index_dimension": self.dimension,
-
-   "features_enabled": {
-
-    "sentence_transformers": self.use_sentence_transformers,
-
-    "reranker": self.use_reranker,
-
-    "azure_openai": self.embedding_model is not None and self.llm is not None
-
-   }
-
-  }
-
-  if self.data is not None:
-
-   status["data_shape"] = list(self.data.shape)
-
-   status["columns"] = list(self.data.columns)
-
-   status["column_info"] = self.column_info
-
-  if self.index:
-
-   status["faiss_index_size"] = self.index.ntotal
-
-  if self.st_embeddings is not None:
-
-   status["sentence_transformer_embeddings_count"] = len(self.st_embeddings)
-
-  return make_serializable(status)
-
- def analyze_data_directly(self, query: str, excel_file_path: str = None, sheet_name: str = None) -> Dict[str, Any]:
-
-  """
-
-  Perform direct data analysis using Pandas instead of document retrieval.
-
-  This bypasses the RAG pipeline and provides structured data insights.
-
-  Uses the system's already loaded data by default.
-
-  """
-
-  logger.info(f"Starting analytical thinking mode for query: {query[:100]}...")
-
-  try:
-
-   # Use the system's already loaded data instead of loading new data
-
-   if self.data is None or self.data.empty:
-
-    raise ValueError("No data available in the system. Please initialize the system first with data.")
-
-   # Use the system's current data
-
-   df = self.data.copy()
-
-   # Remove the combined_text column for analysis as it's just a concatenation
-
-   if 'combined_text' in df.columns:
-
-    df = df.drop('combined_text', axis=1)
-
-   logger.info(f"Using system's loaded data: {len(df)} rows, {len(df.columns)} columns")
-
-   # Analyze the query to determine what kind of analysis to perform
-
-   analysis_results = self._perform_data_analysis(df, query)
-
-   # Generate structured context for LLM
-
-   structured_context = self._generate_analytical_context(df, analysis_results, query)
-
-   # Generate LLM response using analytical context
-
-   if self.llm:
-
-    analytical_response = self._generate_analytical_response(query, structured_context)
-
-   else:
-
-    analytical_response = "LLM not available for response generation."
-
-   return {
-
-    "response": analytical_response,
-
-    "analytical_results": analysis_results,
-
-    "data_summary": {
-
-     "total_rows": len(df),
-
-     "total_columns": len(df.columns),
-
-     "columns": list(df.columns),
-
-     "source": "System loaded data",
-
-     "file_path": self.excel_file_path
-
-    },
-
-    "query": query,
-
-    "mode": "analytical_thinking"
-
-   }
-
-  except Exception as e:
-
-   logger.error(f"Error in analytical thinking mode: {e}", exc_info=True)
-
-   return {
-
-    "response": f"Error in analytical mode: {str(e)}. Please ensure the system is properly initialized with data.",
-
-    "analytical_results": {"error": str(e)},
-
-    "query": query,
-
-    "mode": "analytical_thinking"
-
-   }
-
-# FastAPI Application
-
-app = FastAPI(
-
- title="Enhanced Azure RAG System API",
-
- description="Advanced RAG system with multiple retrieval methods and re-ranking",
-
- version="2.0.0"
-
-)
-
-app.add_middleware(
-
- CORSMiddleware,
-
- allow_origins=["*"],
-
- allow_credentials=True,
-
- allow_methods=["*"],
-
- allow_headers=["*"],
-
-)
-
-# Global variable to hold the RAG system instance
-
-rag_system: Optional[EnhancedAdaptiveRAGSystem] = None
-
-# Pydantic models for API requests
-
-class QueryRequest(BaseModel):
-
- query: str
-
- k: Optional[int] = 3
-
- temperature: Optional[float] = None
-
- analytical_mode: Optional[bool] = False
-
- excel_file_path: Optional[str] = None
-
- sheet_name: Optional[str] = None
-
-class InitializeRequest(BaseModel):
-
- excel_file_path: str
-
- temperature: Optional[float] = 0.7
-
- concise_prompt: Optional[bool] = False
-
- index_file: Optional[str] = "Azure_Implementation/faiss_index_azure.bin"
-
- use_sentence_transformers: Optional[bool] = True
-
- use_reranker: Optional[bool] = True
-
- sentence_transformer_model: Optional[str] = "all-MiniLM-L6-v2"
-
- reranker_model: Optional[str] = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-
-class RebuildIndexRequest(BaseModel):
-
- force_rebuild: Optional[bool] = False
-
-# Exception handler for better error responses
-
-@app.exception_handler(HTTPException)
-
-async def http_exception_handler(request: Request, exc: HTTPException):
-
- return JSONResponse(
-
-  status_code=exc.status_code,
-
-  content={"detail": exc.detail, "status_code": exc.status_code}
-
- )
-
-@app.exception_handler(Exception)
-
-async def general_exception_handler(request: Request, exc: Exception):
-
- logger.error(f"Unhandled exception: {exc}", exc_info=True)
-
- return JSONResponse(
-
-  status_code=500,
-
-  content={"detail": "Internal server error", "error": str(exc)}
-
- )
-
-@app.post("/initialize")
-
-async def initialize_system(request: InitializeRequest):
-
- """Initialize the RAG system with specified configuration"""
-
- global rag_system
-
- try:
-
-  logger.info(f"Initializing RAG system with file: {request.excel_file_path}")
-
-  rag_system = EnhancedAdaptiveRAGSystem(
-
-   excel_file_path=request.excel_file_path,
-
-   temperature=request.temperature,
-
-   concise_prompt=request.concise_prompt,
-
-   index_file=request.index_file,
-
-   use_sentence_transformers=request.use_sentence_transformers,
-
-   use_reranker=request.use_reranker,
-
-   sentence_transformer_model=request.sentence_transformer_model,
-
-   reranker_model=request.reranker_model
-
-  )
-
-  status = rag_system.get_system_status()
-
-  logger.info("RAG system initialized successfully")
-
-  return {
-
-   "message": "RAG system initialized successfully",
-
-   "status": status
-
-  }
-
- except Exception as e:
-
-  logger.error(f"Failed to initialize RAG system: {e}", exc_info=True)
-
-  raise HTTPException(status_code=500, detail=f"Initialization failed: {str(e)}")
-
-@app.post("/query")
-
-async def query_system(request: QueryRequest):
-
- """Query the RAG system with optional analytical mode"""
-
- global rag_system
-
- if rag_system is None:
-
-  raise HTTPException(status_code=400, detail="RAG system not initialized. Please call /initialize first.")
-
- try:
-
-  logger.info(f"Processing query: {request.query[:100]}... (Analytical mode: {request.analytical_mode})")
-
-  # Update temperature if provided
-
-  if request.temperature is not None and rag_system.llm:
-
-   rag_system.llm.temperature = request.temperature
-
-  # Choose processing mode
-
-  if request.analytical_mode:
-
-   # Use analytical thinking mode with system's data
-
-   response = rag_system.analyze_data_directly(query=request.query)
-
-   logger.info("Query processed in analytical thinking mode using system data")
-
-  else:
-
-   # Use traditional RAG mode
-
-   response = rag_system.generate_response(request.query, request.k)
-
-   logger.info("Query processed in traditional RAG mode")
-
-  return response
-
- except Exception as e:
-
-  logger.error(f"Error processing query: {e}", exc_info=True)
-
-  raise HTTPException(status_code=500, detail=f"Query processing failed: {str(e)}")
-
-@app.post("/rebuild-index")
-
-async def rebuild_index(request: RebuildIndexRequest):
-
- """Rebuild the FAISS index and sentence transformer embeddings"""
-
- global rag_system
-
- if rag_system is None:
-
-  raise HTTPException(status_code=400, detail="RAG system not initialized. Please call /initialize first.")
-
- try:
-
-  logger.info("Rebuilding indices...")
-
-  rag_system._build_index()
-
-  status = rag_system.get_system_status()
-
-  logger.info("Indices rebuilt successfully")
-
-  return {
-
-   "message": "Indices rebuilt successfully",
-
-   "status": status
-
-  }
-
- except Exception as e:
-
-  logger.error(f"Failed to rebuild indices: {e}", exc_info=True)
-
-  raise HTTPException(status_code=500, detail=f"Index rebuild failed: {str(e)}")
-
-@app.get("/status")
-
-async def get_status():
-
- """Get system status information"""
-
- global rag_system
-
- if rag_system is None:
-
-  return {
-
-   "initialized": False,
-
-   "message": "RAG system not initialized"
-
-  }
-
- try:
-
-  status = rag_system.get_system_status()
-
-  status["initialized"] = True
-
-  return status
-
- except Exception as e:
-
-  logger.error(f"Error getting status: {e}", exc_info=True)
-
-  raise HTTPException(status_code=500, detail=f"Status check failed: {str(e)}")
-
-@app.post("/retrieve")
-
-async def retrieve_documents(request: QueryRequest):
-
- """Retrieve relevant documents without generating a response"""
-
- global rag_system
-
- if rag_system is None:
-
-  raise HTTPException(status_code=400, detail="RAG system not initialized. Please call /initialize first.")
-
- # Analytical mode doesn't support document retrieval
-
- if request.analytical_mode:
-
-  raise HTTPException(status_code=400, detail="Document retrieval not available in analytical mode. Use /query endpoint instead.")
-
- try:
-
-  logger.info(f"Retrieving documents for query: {request.query[:100]}...")
-
-  retrieved_docs = rag_system.retrieve(request.query, request.k)
-
-  pattern_analysis = rag_system.analyze_patterns(retrieved_docs)
-
-  return {
-
-   "query": request.query,
-
-   "retrieved_docs": make_serializable(retrieved_docs),
-
-   "pattern_analysis": make_serializable(pattern_analysis),
-
-   "count": len(retrieved_docs)
-
-  }
-
- except Exception as e:
-
-  logger.error(f"Error retrieving documents: {e}", exc_info=True)
-
-  raise HTTPException(status_code=500, detail=f"Document retrieval failed: {str(e)}")
-
-@app.get("/health")
-
-async def health_check():
-
- """Simple health check endpoint"""
-
- return {
-
-  "status": "healthy",
-
-  "timestamp": datetime.datetime.now().isoformat(),
-
-  "system_initialized": rag_system is not None
-
- }
-
-@app.get("/")
-
-async def root():
-
- """Root endpoint with API information"""
-
- return {
-
-  "message": "Enhanced Azure RAG System API",
-
-  "version": "2.0.0",
-
-  "features": [
-
-   "Azure OpenAI Integration",
-
-   "Sentence Transformers",
-
-   "Cross-Encoder Re-ranking",
-
-   "FAISS Vector Search",
-
-   "Pattern Analysis"
-
-  ],
-
-  "endpoints": {
-
-   "POST /initialize": "Initialize the RAG system",
-
-   "POST /query": "Query the system for responses",
-
-   "POST /retrieve": "Retrieve relevant documents only",
-
-   "POST /rebuild-index": "Rebuild search indices",
-
-   "GET /status": "Get system status",
-
-   "GET /health": "Health check"
-
-  }
-
- }
-
-if __name__ == "__main__":
-
- logger.info("Starting Enhanced Azure RAG System API server...")
-
- uvicorn.run(
-
-  "rag_system:app",
-
-  host="0.0.0.0",
-
-  port=8000,
-
-  log_level="info",
-
-  access_log=True,
-
-  reload=True
-
- )
+            return {
+                "response": f"Error in analytical mode: {str(e)}. Please ensure the system is properly initialized with data.",
+                "analytical_results": {"error": str(e)},
+                "query": query,
+                "mode": "analytical_thinking",
+            }
